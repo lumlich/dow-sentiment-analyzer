@@ -1,72 +1,52 @@
 {
   "default_weight": 0.60,
   "weights": {
-    "trump": 0.98,
-    "biden": 0.95,
-    "powell": 0.97,
-    "fed": 0.95,
-    "fomc": 0.95,
-    "yellen": 0.93,
-    "musk": 0.97,
-    "xi": 0.95,
-
-    "wsj": 0.90,
+    "trump": 0.95,
+    "potus": 0.95,
+    "white house": 0.92,
+    "federal reserve": 0.90,
+    "fed": 0.90,
+    "jerome powell": 0.90,
+    "yellen": 0.88,
+    "treasury": 0.88,
+    "elon musk": 0.97,
+    "sec": 0.90,
+    "opec": 0.92,
+    "boj": 0.90,
+    "ecb": 0.90,
+    "jamie dimon": 0.85,
+    "tim cook": 0.83,
+    "satya nadella": 0.83,
+    "sundar pichai": 0.82,
+    "mark zuckerberg": 0.82,
+    "g7": 0.82,
+    "g20": 0.82,
+    "bank of england": 0.85,
+    "imf": 0.85,
+    "world bank": 0.83,
+    "cnbc": 0.80,
+    "fox business": 0.78,
+    "bloomberg": 0.80,
+    "financial times": 0.80,
     "wall street journal": 0.90,
-    "reuters": 0.85,
-    "bloomberg": 0.85,
-    "financial times": 0.90,
-    "new york times": 0.88,
-
-    "apple": 0.90,
-    "microsoft": 0.90,
-    "alphabet": 0.88,
-    "google": 0.88,
-    "meta": 0.88,
-    "facebook": 0.88,
-
-    "jamie dimon": 0.90,
-    "jpmorgan": 0.88,
-    "blackrock": 0.86,
-    "goldman sachs": 0.86,
-    "vanguard": 0.84,
-    "ecb": 0.86,
-    "boe": 0.84
+    "reuters": 0.80,
+    "barron's": 0.78,
+    "nyt business": 0.77
   },
   "aliases": {
-    "@realdonaldtrump": "trump",
-    "president": "biden",
-    "potus": "biden",
-
-    "jerome powell": "powell",
+    "@potus": "potus",
+    "president biden": "potus",
+    "joe biden": "potus",
     "federal reserve": "fed",
-
+    "powell": "jerome powell",
     "janet yellen": "yellen",
-    "u.s. treasury": "yellen",
-    "treasury": "yellen",
-
-    "elon": "musk",
-    "@elonmusk": "musk",
-
-    "xi jinping": "xi",
-    "xijinping": "xi",
-
-    "the wall street journal": "wall street journal",
-    "wsj.com": "wsj",
-
+    "us treasury": "treasury",
+    "@elonmusk": "elon musk",
+    "tesla ceo": "elon musk",
+    "spacex": "elon musk",
+    "opec+": "opec",
+    "wsj": "wall street journal",
     "ft": "financial times",
-    "nytimes": "new york times",
-    "nyt": "new york times",
-
-    "google inc": "google",
-    "alphabet inc": "alphabet",
-    "meta platforms": "meta",
-    "facebook inc": "facebook",
-
-    "jp morgan": "jpmorgan",
-    "j.p. morgan": "jpmorgan",
-    "gs": "goldman sachs",
-
-    "european central bank": "ecb",
-    "bank of england": "boe"
+    "nyt": "nyt business"
   }
 }

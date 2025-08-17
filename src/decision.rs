@@ -83,6 +83,7 @@ pub struct Decision {
     pub top_contributors: Vec<Contributor>,
 }
 
+#[allow(dead_code)]
 impl Decision {
     /// Vytvoří prázdné (skeletální) rozhodnutí s daným verdiktem a confidence.
     pub fn new(verdict: Verdict, confidence: f32) -> Self {

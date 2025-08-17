@@ -9,12 +9,14 @@ use shuttle_axum::axum::{
 use tower_http::cors::CorsLayer;
 
 use crate::decision::Decision;
-use crate::disruption::{self, DisruptionInput, evaluate_with_weights};
+use crate::disruption::{self, evaluate_with_weights, DisruptionInput};
 use crate::engine;
 use crate::history::History;
 use crate::rolling::RollingWindow;
 use crate::sentiment::{BatchItem, SentimentAnalyzer};
 use crate::source_weights::SourceWeightsConfig;
+
+const VOLUME_WINDOW_SECS: u64 = 600; // 10 minut
 
 #[derive(Clone)]
 pub struct AppState {
@@ -43,7 +45,10 @@ pub fn create_router() -> Router {
         .route("/debug/history", get(debug_history))
         .route("/debug/last-decision", get(debug_last_decision))
         .route("/debug/source-weight", get(debug_source_weight))
-        .route("/admin/reload-source-weights", get(admin_reload_source_weights))
+        .route(
+            "/admin/reload-source-weights",
+            get(admin_reload_source_weights),
+        )
         .layer(CorsLayer::very_permissive())
         .with_state(state)
 }
@@ -128,7 +133,31 @@ async fn decide_batch(
         scored.push((bi, score, res));
     }
 
-    let decision = engine::make_decision(&scored);
+    let mut decision = engine::make_decision(&scored);
+
+    // -> VOLUME v4 korekce
+    let (vf, recent_triggers, uniq_sources) = volume_factor_from_history(&state.history, now);
+    let old_conf = decision.confidence;
+    let new_conf = (old_conf * vf).clamp(0.0, 0.99);
+    decision.confidence = new_conf;
+
+    // volitelný „reason“ pro transparentnost (použijeme ReasonKind::Threshold kvůli stávajícímu JSON shape)
+    decision.reasons.push(
+        crate::decision::Reason::new(format!(
+            "Volume context (last {}s): {} triggers from {} sources -> confidence x{:.3} ({}→{})",
+            VOLUME_WINDOW_SECS,
+            recent_triggers,
+            uniq_sources,
+            vf,
+            format!("{:.3}", old_conf),
+            format!("{:.3}", new_conf)
+        ))
+        .kind(crate::decision::ReasonKind::Threshold)
+        .weighted(((vf - 0.90) / (1.05 - 0.90)).clamp(0.0, 1.0) as f32), // jen orientační weight 0..1
+    );
+
+    // až teď zapiš do historie (ať už je confidence finální)
+
     state.history.push(&decision);
     Json(decision)
 }
@@ -139,6 +168,41 @@ fn current_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn volume_factor_from_history(hist: &History, now: u64) -> (f32, usize, usize) {
+    let rows = hist.snapshot_last_n(200); // stačí malý buffer
+    let mut recent_triggers = 0usize;
+    let mut uniq = std::collections::HashSet::new();
+
+    for h in rows {
+        if now.saturating_sub(h.ts_unix) <= VOLUME_WINDOW_SECS {
+            // „relevantní“ = BUY nebo SELL
+            if matches!(
+                h.verdict,
+                crate::decision::Verdict::Buy | crate::decision::Verdict::Sell
+            ) {
+                recent_triggers += 1;
+                // sbíráme zdroje (bez ohledu na směr)
+                for s in h.top_sources.iter().take(5) {
+                    uniq.insert(s.clone());
+                }
+            }
+        }
+    }
+
+    let rt = recent_triggers.min(5) as f32;
+    let us = uniq.len().min(5) as f32;
+
+    let mut vf = 0.90 + 0.02 * rt + 0.01 * us; // ∈ [0.90, 1.05]
+    if vf < 0.90 {
+        vf = 0.90;
+    }
+    if vf > 1.05 {
+        vf = 1.05;
+    }
+
+    (vf, recent_triggers, uniq.len())
 }
 
 #[derive(serde::Serialize)]

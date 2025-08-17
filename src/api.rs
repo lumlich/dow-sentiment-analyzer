@@ -1,7 +1,7 @@
 use std::sync::Arc;
-
+use std::collections::HashMap;
 use shuttle_axum::axum::{
-    extract::State,
+    extract::{Query, State},
     routing::{get, post},
     Json, Router,
 };
@@ -13,19 +13,23 @@ use crate::engine;
 use crate::history::History;
 use crate::rolling::RollingWindow;
 use crate::sentiment::{BatchItem, SentimentAnalyzer}; // import
+use crate::source_weights::SourceWeightsConfig;
 
 #[derive(Clone)]
 pub struct AppState {
     analyzer: Arc<SentimentAnalyzer>,
     rolling: Arc<RollingWindow>,
     history: Arc<History>, // přidáno pro historii
+    source_weights: Arc<SourceWeightsConfig>, // ← NOVÉ
 }
 
 pub fn create_router() -> Router {
+    let sw = SourceWeightsConfig::load_from_file("source_weights.json");
     let state = AppState {
         analyzer: Arc::new(SentimentAnalyzer::new()),
         rolling: Arc::new(RollingWindow::new_48h()),
         history: Arc::new(History::with_capacity(2000)), // ~poslední tisíce rozhodnutí
+        source_weights: Arc::new(sw), // ← NOVÉ
     };
 
     Router::new()
@@ -36,6 +40,7 @@ pub fn create_router() -> Router {
         .route("/debug/rolling", get(debug_rolling)) // ← přidat
         .route("/debug/history", get(debug_history)) // ← nový debug endpoint
         .route("/debug/last-decision", get(debug_last_decision))
+        .route("/debug/source-weight", get(debug_source_weight)) // ← malý debug
         .layer(CorsLayer::very_permissive())
         .with_state(state)
 }
@@ -113,7 +118,7 @@ async fn decide_batch(
             score,
             ts_unix: ts,
         };
-        let res = crate::disruption::evaluate(&di);
+        let res = crate::disruption::evaluate_with_weights(&di, &state.source_weights);
 
         // Do scored ukládáme BatchItem (kvůli shape contributors):
         let bi = crate::sentiment::BatchItem {
@@ -199,4 +204,15 @@ async fn debug_last_decision(State(state): State<AppState>) -> Json<Option<LastO
         }));
     }
     Json(None)
+}
+
+
+
+async fn debug_source_weight(
+    State(state): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> String {
+    let s = q.get("source").cloned().unwrap_or_default();
+    let w = state.source_weights.weight_for(&s);
+    format!("source='{}' -> weight={:.2}", s, w)
 }

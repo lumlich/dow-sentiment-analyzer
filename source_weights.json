@@ -1,0 +1,72 @@
+{
+  "default_weight": 0.60,
+  "weights": {
+    "trump": 0.98,
+    "biden": 0.95,
+    "powell": 0.97,
+    "fed": 0.95,
+    "fomc": 0.95,
+    "yellen": 0.93,
+    "musk": 0.97,
+    "xi": 0.95,
+
+    "wsj": 0.90,
+    "wall street journal": 0.90,
+    "reuters": 0.85,
+    "bloomberg": 0.85,
+    "financial times": 0.90,
+    "new york times": 0.88,
+
+    "apple": 0.90,
+    "microsoft": 0.90,
+    "alphabet": 0.88,
+    "google": 0.88,
+    "meta": 0.88,
+    "facebook": 0.88,
+
+    "jamie dimon": 0.90,
+    "jpmorgan": 0.88,
+    "blackrock": 0.86,
+    "goldman sachs": 0.86,
+    "vanguard": 0.84,
+    "ecb": 0.86,
+    "boe": 0.84
+  },
+  "aliases": {
+    "@realdonaldtrump": "trump",
+    "president": "biden",
+    "potus": "biden",
+
+    "jerome powell": "powell",
+    "federal reserve": "fed",
+
+    "janet yellen": "yellen",
+    "u.s. treasury": "yellen",
+    "treasury": "yellen",
+
+    "elon": "musk",
+    "@elonmusk": "musk",
+
+    "xi jinping": "xi",
+    "xijinping": "xi",
+
+    "the wall street journal": "wall street journal",
+    "wsj.com": "wsj",
+
+    "ft": "financial times",
+    "nytimes": "new york times",
+    "nyt": "new york times",
+
+    "google inc": "google",
+    "alphabet inc": "alphabet",
+    "meta platforms": "meta",
+    "facebook inc": "facebook",
+
+    "jp morgan": "jpmorgan",
+    "j.p. morgan": "jpmorgan",
+    "gs": "goldman sachs",
+
+    "european central bank": "ecb",
+    "bank of england": "boe"
+  }
+}

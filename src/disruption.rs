@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use crate::source_weights::SourceWeightsConfig;
 
 /// Konfigurační prahy — jednoduché a čitelné, ať je lze snadno ladit.
 const TRIGGER_W_SOURCE_MIN: f32 = 0.80;
@@ -114,6 +115,27 @@ fn clamp01(x: f32) -> f32 {
         1.0
     } else {
         x
+    }
+}
+
+pub fn evaluate_with_weights(input: &DisruptionInput, sw: &SourceWeightsConfig) -> DisruptionResult {
+    let now = now_unix();
+    let age_secs = now.saturating_sub(input.ts_unix);
+
+    let w_strength = strength_weight(input.score);
+    let w_source = clamp01(sw.weight_for(&input.source));
+
+    let is_fresh = age_secs <= TRIGGER_MAX_AGE_SECS;
+
+    let passes =
+        w_source >= TRIGGER_W_SOURCE_MIN &&
+        w_strength >= TRIGGER_W_STRENGTH_MIN &&
+        is_fresh;
+
+    if passes {
+        DisruptionResult::triggered(w_source, w_strength, age_secs)
+    } else {
+        DisruptionResult::not_triggered(w_source, w_strength, age_secs)
     }
 }
 

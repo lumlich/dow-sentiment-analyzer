@@ -5,6 +5,7 @@ mod rolling;
 mod sentiment;
 mod engine;
 mod history;
+mod source_weights;
 
 use shuttle_axum::ShuttleAxum;
 

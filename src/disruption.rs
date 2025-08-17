@@ -7,9 +7,9 @@
 //!
 //! Pozn.: Zatím čistě „business logika“ bez I/O, bez side-effectů.
 
+use crate::source_weights::SourceWeightsConfig;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use crate::source_weights::SourceWeightsConfig;
 
 /// Konfigurační prahy — jednoduché a čitelné, ať je lze snadno ladit.
 const TRIGGER_W_SOURCE_MIN: f32 = 0.80;
@@ -118,7 +118,10 @@ fn clamp01(x: f32) -> f32 {
     }
 }
 
-pub fn evaluate_with_weights(input: &DisruptionInput, sw: &SourceWeightsConfig) -> DisruptionResult {
+pub fn evaluate_with_weights(
+    input: &DisruptionInput,
+    sw: &SourceWeightsConfig,
+) -> DisruptionResult {
     let now = now_unix();
     let age_secs = now.saturating_sub(input.ts_unix);
 
@@ -128,9 +131,7 @@ pub fn evaluate_with_weights(input: &DisruptionInput, sw: &SourceWeightsConfig) 
     let is_fresh = age_secs <= TRIGGER_MAX_AGE_SECS;
 
     let passes =
-        w_source >= TRIGGER_W_SOURCE_MIN &&
-        w_strength >= TRIGGER_W_STRENGTH_MIN &&
-        is_fresh;
+        w_source >= TRIGGER_W_SOURCE_MIN && w_strength >= TRIGGER_W_STRENGTH_MIN && is_fresh;
 
     if passes {
         DisruptionResult::triggered(w_source, w_strength, age_secs)
@@ -179,5 +180,105 @@ mod tests {
             ts_unix: now - (31 * 60),
         };
         assert!(!evaluate(&b).triggered);
+    }
+}
+
+#[cfg(test)]
+mod weight_integration_tests {
+    use super::*;
+    use crate::source_weights::SourceWeightsConfig;
+    use std::collections::HashMap;
+
+    fn cfg_with(source: &str, w: f32) -> SourceWeightsConfig {
+        let mut weights = HashMap::new();
+        // ulož kanonicky – lowercase
+        weights.insert(source.to_ascii_lowercase(), w);
+        SourceWeightsConfig {
+            default_weight: 0.60,
+            weights,
+            aliases: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn triggers_when_weight_and_strength_meet_thresholds() {
+        // w_source 0.90, score +2 => w_strength ~1.0, age 0 => mělo by TRIGGERNOUT
+        let cfg = cfg_with("BigSource", 0.90);
+        let input = DisruptionInput {
+            source: "BigSource".into(),
+            text: "Strong surge".into(),
+            score: 2, // díky STRENGTH_CAP=2 => w_strength=1.0
+            ts_unix: now_unix(),
+        };
+        let res = evaluate_with_weights(&input, &cfg);
+        assert!(res.triggered, "mělo to triggernout");
+        assert!(res.w_source >= 0.90);
+        assert!(res.w_strength >= 0.90);
+    }
+
+    #[test]
+    fn does_not_trigger_if_source_weight_too_low() {
+        // w_source 0.70 (pod prahem), jinak silné => NEMÁ triggernout
+        let cfg = cfg_with("LowSource", 0.70);
+        let input = DisruptionInput {
+            source: "LowSource".into(),
+            text: "Strong surge".into(),
+            score: 2,
+            ts_unix: now_unix(),
+        };
+        let res = evaluate_with_weights(&input, &cfg);
+        assert!(!res.triggered, "nemělo to triggernout kvůli nízké w_source");
+        assert!(res.w_source < 0.80);
+        assert!(res.w_strength >= 0.90); // síla je OK, ale zdroj zablokuje
+    }
+
+    #[test]
+    fn does_not_trigger_if_too_old() {
+        let cfg = cfg_with("Fed", 0.95);
+        let old_ts = now_unix().saturating_sub(31 * 60); // 31 min zpět
+        let input = DisruptionInput {
+            source: "Fed".into(),
+            text: "Markets will crash".into(),
+            score: -3,
+            ts_unix: old_ts,
+        };
+        let res = evaluate_with_weights(&input, &cfg);
+        assert!(!res.triggered, "nemělo to triggernout kvůli stáří výroku");
+        assert!(res.w_source >= 0.90);
+        assert!(res.w_strength >= 0.90);
+        assert!(res.age_secs > 1800);
+    }
+}
+
+#[cfg(test)]
+mod reload_like_test {
+    use super::*;
+    use std::sync::{Arc, RwLock};
+
+    #[test]
+    fn rwlock_update_config_works() {
+        let initial = SourceWeightsConfig::default_seed();
+        let lock = Arc::new(RwLock::new(initial));
+
+        // čtení
+        {
+            let g = lock.read().unwrap();
+            assert!((g.weight_for("Trump") - 0.98).abs() < 1e-6);
+        }
+
+        // zápis nového cfg (změňme třeba Trump->0.80)
+        let mut new = SourceWeightsConfig::default_seed();
+        new.weights.insert("trump".to_string(), 0.80);
+
+        {
+            let mut w = lock.write().unwrap();
+            *w = new;
+        }
+
+        // ověř novou váhu
+        {
+            let g = lock.read().unwrap();
+            assert!((g.weight_for("Trump") - 0.80).abs() < 1e-6);
+        }
     }
 }

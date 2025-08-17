@@ -55,7 +55,7 @@ impl SourceWeightsConfig {
     }
 
     /// Vestavěný seed (když není config nebo je rozbitý).
-    fn default_seed() -> Self {
+    pub(crate) fn default_seed() -> Self {
         let mut weights = HashMap::new();
         let mut aliases = HashMap::new();
 
@@ -131,10 +131,20 @@ impl SourceWeightsConfig {
 }
 
 fn normalize(s: &str) -> String {
-    s.trim()
-        .to_ascii_lowercase()
-        .replace(['\n', '\r', '\t'], " ")
-        .replace(['—', '–'], "-") // vyhladíme typografii
+    // lowercase + trim
+    let mut out = s.trim().to_ascii_lowercase();
+
+    // 1) sjednotit oddělovače na mezery (pomlčky, podtržítka, lomítka…)
+    for ch in ['—', '–', '-', '_', '/', '\\'] {
+        out = out.replace(ch, " ");
+    }
+
+    // 2) odstranit rušivou interpunkci / whitespace → mezera
+    out = out.replace(['\n', '\r', '\t', '.', ',', '‚', '’', '\''], " ");
+
+    // 3) sloučit vícenásobné mezery
+    let collapsed = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed
 }
 
 fn clamp01(x: f32) -> f32 {
@@ -175,5 +185,42 @@ mod tests {
     fn default_weight_used() {
         let c = cfg();
         assert!((c.weight_for("TotallyUnknown") - c.default_weight).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod extra_tests {
+    use super::*;
+
+    #[test]
+    fn case_insensitive_lookup() {
+        let cfg = SourceWeightsConfig::default_seed();
+        // různé zápisy musí vracet stejnou váhu
+        let a = cfg.weight_for("TRUMP");
+        let b = cfg.weight_for("trump");
+        let c = cfg.weight_for("Trump");
+        assert!((a - b).abs() < 1e-6 && (b - c).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dash_and_typography_normalization() {
+        let cfg = SourceWeightsConfig::default_seed();
+        // typografická pomlčka nebo různé formy názvu
+        let a = cfg.weight_for("Wall—Street—Journal");
+        let b = cfg.weight_for("Wall - Street - Journal");
+        let c = cfg.weight_for("The Wall Street Journal");
+        // všechny by měly spadnout na stejné kanonické "wall street journal" => ~0.90
+        assert!((a - 0.90).abs() < 1e-6);
+        assert!((b - 0.90).abs() < 1e-6);
+        assert!((c - 0.90).abs() < 1e-6);
+    }
+
+    #[test]
+    fn alias_overrides_to_canonical() {
+        let cfg = SourceWeightsConfig::default_seed();
+        // alias -> "musk" -> 0.97
+        assert!((cfg.weight_for("@elonmusk") - 0.97).abs() < 1e-6);
+        // alias -> "fed" -> 0.95
+        assert!((cfg.weight_for("Federal Reserve") - 0.95).abs() < 1e-6);
     }
 }

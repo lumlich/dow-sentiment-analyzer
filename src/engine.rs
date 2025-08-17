@@ -73,7 +73,7 @@ pub fn make_decision(scored: &[(BatchItem, i32, DisruptionResult)]) -> Decision 
         // 4a) Explicitní potvrzení splnění thresholdů (ASCII, ať se netrhá v konzoli)
         for (it, _score, res) in main_triggers.iter().take(3) {
             let msg = format!(
-        "Trigger met: source>=0.80, strength>=0.90, age<=1800s (actual: w_source {:.2}, w_strength {:.2}, age {}s) — {}",
+        "Trigger met: source>=0.80, strength>=0.90, age<=1800s (actual: w_source {:.2}, w_strength {:.2}, age {}s) - {}",
         res.w_source, res.w_strength, res.age_secs, it.source
     );
             reasons.push(

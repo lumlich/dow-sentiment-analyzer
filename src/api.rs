@@ -1,5 +1,6 @@
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
 use shuttle_axum::axum::{
     extract::{Query, State},
     routing::{get, post},
@@ -8,39 +9,41 @@ use shuttle_axum::axum::{
 use tower_http::cors::CorsLayer;
 
 use crate::decision::Decision;
-use crate::disruption::{self, DisruptionInput};
+use crate::disruption::{self, DisruptionInput, evaluate_with_weights};
 use crate::engine;
 use crate::history::History;
 use crate::rolling::RollingWindow;
-use crate::sentiment::{BatchItem, SentimentAnalyzer}; // import
+use crate::sentiment::{BatchItem, SentimentAnalyzer};
 use crate::source_weights::SourceWeightsConfig;
 
 #[derive(Clone)]
 pub struct AppState {
     analyzer: Arc<SentimentAnalyzer>,
     rolling: Arc<RollingWindow>,
-    history: Arc<History>, // přidáno pro historii
-    source_weights: Arc<SourceWeightsConfig>, // ← NOVÉ
+    history: Arc<History>,
+    source_weights: Arc<RwLock<SourceWeightsConfig>>,
 }
 
 pub fn create_router() -> Router {
     let sw = SourceWeightsConfig::load_from_file("source_weights.json");
+
     let state = AppState {
         analyzer: Arc::new(SentimentAnalyzer::new()),
         rolling: Arc::new(RollingWindow::new_48h()),
-        history: Arc::new(History::with_capacity(2000)), // ~poslední tisíce rozhodnutí
-        source_weights: Arc::new(sw), // ← NOVÉ
+        history: Arc::new(History::with_capacity(2000)),
+        source_weights: Arc::new(RwLock::new(sw)),
     };
 
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/analyze", post(analyze))
         .route("/batch", post(analyze_batch))
-        .route("/decide", post(decide_batch)) // ← nový endpoint
-        .route("/debug/rolling", get(debug_rolling)) // ← přidat
-        .route("/debug/history", get(debug_history)) // ← nový debug endpoint
+        .route("/decide", post(decide_batch))
+        .route("/debug/rolling", get(debug_rolling))
+        .route("/debug/history", get(debug_history))
         .route("/debug/last-decision", get(debug_last_decision))
-        .route("/debug/source-weight", get(debug_source_weight)) // ← malý debug
+        .route("/debug/source-weight", get(debug_source_weight))
+        .route("/admin/reload-source-weights", get(admin_reload_source_weights))
         .layer(CorsLayer::very_permissive())
         .with_state(state)
 }
@@ -82,13 +85,11 @@ async fn analyze_batch(
         .map(|it| {
             let (score, _) = state.analyzer.score_text(&it.text);
             state.rolling.record(score, None);
-            // ↓↓↓ Disruption skeleton: spočti složky a rozhodni, jestli by to byl "šok".
-            // (Zatím jen vypočítáme; zapojení do API výstupu přijde v dalším kroku.)
             let _res = disruption::evaluate(&DisruptionInput {
                 source: it.source.clone(),
                 text: it.text.clone(),
                 score,
-                ts_unix: current_unix(), // při batchi bez timestampu bereme "teď"
+                ts_unix: current_unix(),
             });
             (it, score)
         })
@@ -96,15 +97,12 @@ async fn analyze_batch(
     Json(scored)
 }
 
-/// Nový endpoint: z dávky zpráv vrátí okamžitý verdict + explainability.
-/// Kontrakt vstupu je stejný jako u /batch (Vec<BatchItem>).
 async fn decide_batch(
     State(state): State<AppState>,
-    Json(items): Json<Vec<DecideItem>>, // pokud už máš DecideItem; jinak klidně Vec<BatchItem>
+    Json(items): Json<Vec<DecideItem>>,
 ) -> Json<Decision> {
     let now = current_unix();
 
-    // spočti score + disruption pro všechny položky
     let mut scored = Vec::with_capacity(items.len());
     for it in items {
         let (score, _tokens) = state.analyzer.score_text(&it.text);
@@ -112,16 +110,18 @@ async fn decide_batch(
 
         let ts = it.ts_unix.unwrap_or(now);
 
-        let di = crate::disruption::DisruptionInput {
+        let di = DisruptionInput {
             source: it.source.clone(),
             text: it.text.clone(),
             score,
             ts_unix: ts,
         };
-        let res = crate::disruption::evaluate_with_weights(&di, &state.source_weights);
+        let res = {
+            let guard = state.source_weights.read().expect("rwlock poisoned");
+            evaluate_with_weights(&di, &guard)
+        };
 
-        // Do scored ukládáme BatchItem (kvůli shape contributors):
-        let bi = crate::sentiment::BatchItem {
+        let bi = BatchItem {
             source: it.source,
             text: it.text,
         };
@@ -133,7 +133,6 @@ async fn decide_batch(
     Json(decision)
 }
 
-// Pomůcka pro API; držíme místně, ať netaháme další závislosti.
 fn current_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -182,7 +181,6 @@ async fn debug_history(State(state): State<AppState>) -> Json<Vec<HistoryOut>> {
     Json(out)
 }
 
-// handler:
 #[derive(serde::Serialize)]
 struct LastOut {
     ts_unix: u64,
@@ -206,13 +204,25 @@ async fn debug_last_decision(State(state): State<AppState>) -> Json<Option<LastO
     Json(None)
 }
 
-
-
 async fn debug_source_weight(
     State(state): State<AppState>,
     Query(q): Query<HashMap<String, String>>,
 ) -> String {
     let s = q.get("source").cloned().unwrap_or_default();
-    let w = state.source_weights.weight_for(&s);
+    let w = {
+        let g = state.source_weights.read().expect("rwlock poisoned");
+        g.weight_for(&s)
+    };
     format!("source='{}' -> weight={:.2}", s, w)
+}
+
+async fn admin_reload_source_weights(State(state): State<AppState>) -> String {
+    let fresh = SourceWeightsConfig::load_from_file("source_weights.json");
+    match state.source_weights.write() {
+        Ok(mut w) => {
+            *w = fresh;
+            "reloaded".to_string()
+        }
+        Err(_) => "failed: lock poisoned".to_string(),
+    }
 }

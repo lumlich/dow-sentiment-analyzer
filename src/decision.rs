@@ -181,7 +181,6 @@ fn clamp01(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json, Value};
 
     #[test]
 fn serialize_decision_shape_matches_roadmap() {

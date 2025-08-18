@@ -1,6 +1,9 @@
-//! rolling.rs — Jednoduché klouzavé okno pro informativní metriky (48h).
-//! Sběr score s časovou značkou a výpočet průměru/počtu za poslední okno.
-//! Neřeší notifikace; ty přijdou v disruption detektoru.
+//! # Rolling Window
+//! Simple sliding window for informative metrics (default 48h).
+//!
+//! Collects `(score, timestamp)` pairs and computes average/count over
+//! the last window. This is informational only; notifications are handled
+//! in the disruption detector.
 
 use std::{
     collections::VecDeque,
@@ -8,6 +11,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+/// Thread-safe rolling time window over integer sentiment scores.
 #[derive(Debug)]
 pub struct RollingWindow {
     inner: Mutex<Inner>,
@@ -16,12 +20,12 @@ pub struct RollingWindow {
 
 #[derive(Debug)]
 struct Inner {
-    // Ukládáme (unix_seconds, score)
+    /// Stored samples as `(unix_seconds, score)`.
     buf: VecDeque<(u64, i32)>,
 }
 
 impl RollingWindow {
-    /// Vytvoří okno o zadané délce (např. 48h).
+    /// Create a new rolling window with the given duration.
     pub fn with_window(window: Duration) -> Self {
         Self {
             inner: Mutex::new(Inner {
@@ -31,12 +35,14 @@ impl RollingWindow {
         }
     }
 
-    /// Pohodlný konstruktor pro 48h.
+    /// Convenience constructor for 48h window.
     pub fn new_48h() -> Self {
         Self::with_window(Duration::from_secs(48 * 3600))
     }
 
-    /// Přidá pozorování. Pokud `ts_unix` není zadán, použije "teď".
+    /// Record a new observation. If `ts_unix` is `None`, current time is used.
+    ///
+    /// Automatically discards entries older than the window.
     pub fn record(&self, score: i32, ts_unix: Option<u64>) {
         let now = now_unix();
         let ts = ts_unix.unwrap_or(now);
@@ -44,7 +50,6 @@ impl RollingWindow {
 
         let mut inner = self.inner.lock().expect("rolling window mutex poisoned");
 
-        // udržujme velikost a čistíme staré
         inner.buf.push_back((ts, score));
         while let Some(&(t, _)) = inner.buf.front() {
             if t < cutoff {
@@ -55,7 +60,7 @@ impl RollingWindow {
         }
     }
 
-    /// Vrátí průměrné score a počet vzorků v okně.
+    /// Return the average score and number of samples within the window.
     pub fn average_and_count(&self) -> (f32, usize) {
         let now = now_unix();
         let cutoff = now.saturating_sub(self.window.as_secs());
@@ -66,7 +71,7 @@ impl RollingWindow {
 
         for &(t, s) in inner.buf.iter().rev() {
             if t < cutoff {
-                break; // starší hodnoty jsou na začátku; můžeme skončit
+                break; // older values are at the front; can stop early
             }
             sum += s as i64;
             n += 1;
@@ -76,12 +81,13 @@ impl RollingWindow {
         (avg, n)
     }
 
-    /// Vratná délka okna v sekundách (pro debug/telemetrii).
+    /// Length of the window in seconds (useful for diagnostics/telemetry).
     pub fn window_secs(&self) -> u64 {
         self.window.as_secs()
     }
 }
 
+/// Current UNIX time in seconds.
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

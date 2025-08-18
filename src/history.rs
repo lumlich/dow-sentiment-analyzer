@@ -1,20 +1,32 @@
-//! history.rs — jednoduché in-memory logování rozhodnutí pro budoucí antiflutter/alerts.
+//! # History (In-Memory Decision Log)
+//! Simple in-memory logging of recent `Decision`s for diagnostics and
+//! potential future anti-flutter/alert logic.
+//!
+//! - Capacity-limited circular buffer (max 10,000).
+//! - Stores verdict, confidence, and lightweight contributor fingerprints
+//!   (sources and scores).
+//! - Intended for quick debugging, transparency, and context checks.
 
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::decision::{Decision, Verdict};
 
+/// Compact record of a past decision.
+/// Used for quick lookback (no full explainability retained).
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
     pub ts_unix: u64,
     pub verdict: Verdict,
     pub confidence: f32,
-    // stručné „otisky“ explainability pro rychlou diagnostiku:
-    pub top_sources: Vec<String>, // např. ["Trump", "Fed"]
-    pub top_scores: Vec<i32>,     // např. [2, -3]
+    /// Top contributor sources (e.g., `["Trump", "Fed"]`).
+    pub top_sources: Vec<String>,
+    /// Their corresponding scores (e.g., `[2, -3]`).
+    pub top_scores: Vec<i32>,
 }
 
+/// Fixed-capacity in-memory buffer of past decisions.
+/// Thread-safe with a simple `Mutex`.
 #[derive(Debug)]
 pub struct History {
     inner: Mutex<Vec<HistoryEntry>>,
@@ -22,6 +34,7 @@ pub struct History {
 }
 
 impl History {
+    /// Create a new `History` with the given maximum capacity (capped at 10k).
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             inner: Mutex::new(Vec::with_capacity(cap.min(10_000))),
@@ -29,6 +42,9 @@ impl History {
         }
     }
 
+    /// Append a decision snapshot to history.
+    ///
+    /// Keeps only the last `cap` entries; drains older items if needed.
     pub fn push(&self, d: &Decision) {
         let ts = now_unix();
         let (sources, scores) = {
@@ -57,6 +73,7 @@ impl History {
         }
     }
 
+    /// Return a snapshot of the last `n` entries (cheap clone of stored slice).
     pub fn snapshot_last_n(&self, n: usize) -> Vec<HistoryEntry> {
         let v = self.inner.lock().expect("history mutex poisoned");
         let len = v.len();
@@ -65,6 +82,7 @@ impl History {
     }
 }
 
+/// Current UNIX timestamp in seconds.
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

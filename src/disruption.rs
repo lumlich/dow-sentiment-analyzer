@@ -1,36 +1,37 @@
-//! disruption.rs — Vyhodnocení „disruptivních“ výroků.
+//! # Disruption Evaluation
+//! Lightweight, I/O-free heuristics to detect *disruptive* (shock-like) items.
 //!
-//! Záměr: rychlá detekce šoků podle 3 složek:
-//!   - w_source: váha důvěryhodnosti/importance zdroje (Trump, Fed, Yellen, ...).
-//!   - w_strength: síla sentimentu (normalizace podle absolutní hodnoty skóre).
-//!   - recency/age: čerstvost výroku (měkký pokles vlivu mezi 15–30 min).
+//! We score three components:
+//! - `w_source`: credibility/importance of the source (e.g., Trump, Fed, Yellen).
+//! - `w_strength`: sentiment intensity (normalized by absolute score).
+//! - `recency/age`: freshness with a soft decay between 15–30 minutes.
 //!
-//! Pozn.: Čistě „business logika“ bez I/O, bez side-effectů.
+//! Pure business logic with no side effects.
 
 use crate::source_weights::SourceWeightsConfig;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Konfigurační prahy — jednoduché a čitelné, ať je lze snadno ladit.
+/// Simple, readable thresholds for easy tuning.
 const TRIGGER_W_SOURCE_MIN: f32 = 0.80;
 const TRIGGER_W_STRENGTH_MIN: f32 = 0.90;
-pub const TRIGGER_MAX_AGE_SECS: u64 = 30 * 60; // 30 minut
-const RECENCY_SOFT_START_SECS: u64 = 15 * 60; // 15 min (odtud začneme pozvolna tlumit)
+pub const TRIGGER_MAX_AGE_SECS: u64 = 30 * 60; // 30 minutes
+const RECENCY_SOFT_START_SECS: u64 = 15 * 60; // start soft decay at 15 minutes
 
-/// Normalizační strop pro sílu výroku: |score| >= 2 → síla ~ 1.0.
+/// Strength cap: |score| >= 2 → strength ≈ 1.0.
 const STRENGTH_CAP: i32 = 2;
 
-/// Vstup pro vyhodnocení disruption — agregujeme potřebná pole.
+/// Input bundle for disruption evaluation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisruptionInput {
     pub source: String,
     pub text: String,
     pub score: i32,
-    /// Unix timestamp v sekundách (kdy byl výrok publikován / zachycen).
+    /// Unix timestamp (seconds) when the statement was published/seen.
     pub ts_unix: u64,
 }
 
-/// Výsledek vyhodnocení včetně složek; `triggered` říká, zda splněno.
+/// Result including component weights; `triggered` tells whether it fires.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisruptionResult {
     pub triggered: bool,
@@ -58,7 +59,7 @@ impl DisruptionResult {
     }
 }
 
-/// Měkká recency váha: do 15 min 1.0, mezi 15–30 min lineárně klesá na 0.0, poté 0.0.
+/// Soft recency weight: 1.0 up to 15 min; linearly decays to 0.0 by 30 min; 0.0 afterwards.
 fn recency_weight(age_secs: u64) -> f32 {
     if age_secs <= RECENCY_SOFT_START_SECS {
         1.0
@@ -71,24 +72,23 @@ fn recency_weight(age_secs: u64) -> f32 {
     }
 }
 
-/// Hlavní funkce: vyhodnoť, zda jde o „disruptivní“ případ (bez externích vah).
+/// Main path: evaluate whether the input is "disruptive" (no external weights).
 pub fn evaluate(input: &DisruptionInput) -> DisruptionResult {
     let now = now_unix();
     let age_secs = now.saturating_sub(input.ts_unix);
 
-    // 1) Síla výroku podle absolutní hodnoty skóre.
+    // 1) Intensity by absolute score.
     let w_strength = strength_weight(input.score);
 
-    // 2) Váha zdroje (heuristika; verze s externím konfigem viz evaluate_with_weights).
+    // 2) Source importance (fallback heuristic; see `evaluate_with_weights` for external config).
     let w_source = source_weight(&input.source);
 
-    // 3) Měkké stáří výroku (plynule tlumíme vliv po 15. minutě).
+    // 3) Soft age ramp-down after 15 minutes.
     let w_recency = recency_weight(age_secs);
 
-    // Trigger jen pokud recency > 0 (tj. ≤ 30 min), a splněny prahy zdroj/síla.
-    let passes = w_source >= TRIGGER_W_SOURCE_MIN
-        && w_strength >= TRIGGER_W_STRENGTH_MIN
-        && w_recency > 0.0;
+    // Fire only if recency > 0 (<= 30 min) and source/strength meet thresholds.
+    let passes =
+        w_source >= TRIGGER_W_SOURCE_MIN && w_strength >= TRIGGER_W_STRENGTH_MIN && w_recency > 0.0;
 
     if passes {
         DisruptionResult::triggered(w_source, w_strength, age_secs)
@@ -97,20 +97,20 @@ pub fn evaluate(input: &DisruptionInput) -> DisruptionResult {
     }
 }
 
-/// Jednoduché škálování síly podle absolutního skóre.
+/// Normalize strength by absolute lexicon score.
 pub fn strength_weight(score: i32) -> f32 {
     let s = (score.abs() as f32) / (STRENGTH_CAP as f32);
     clamp01(s)
 }
 
-/// Heuristika vah pro zdroje (fallback; v produkci používáme evaluate_with_weights).
+/// Heuristic source weights (fallback). In production use `evaluate_with_weights`.
 pub fn source_weight(source: &str) -> f32 {
     let s = source.trim().to_ascii_lowercase();
     match s.as_str() {
         "trump" => 0.95,
         "fed" => 0.90,
         "yellen" => 0.85,
-        // default pro ostatní (analyst, media, apod.)
+        // default for others (analyst, media, etc.)
         _ => 0.60,
     }
 }
@@ -132,8 +132,11 @@ fn clamp01(x: f32) -> f32 {
     }
 }
 
-/// Varianta s externími vahami (konfigurovatelné bez rekompilace).
-pub fn evaluate_with_weights(input: &DisruptionInput, sw: &SourceWeightsConfig) -> DisruptionResult {
+/// Variant with externally provided weights (configurable without recompilation).
+pub fn evaluate_with_weights(
+    input: &DisruptionInput,
+    sw: &SourceWeightsConfig,
+) -> DisruptionResult {
     let now = now_unix();
     let age_secs = now.saturating_sub(input.ts_unix);
 
@@ -141,9 +144,8 @@ pub fn evaluate_with_weights(input: &DisruptionInput, sw: &SourceWeightsConfig) 
     let w_source = clamp01(sw.weight_for(&input.source));
     let w_recency = recency_weight(age_secs);
 
-    let passes = w_source >= TRIGGER_W_SOURCE_MIN
-        && w_strength >= TRIGGER_W_STRENGTH_MIN
-        && w_recency > 0.0;
+    let passes =
+        w_source >= TRIGGER_W_SOURCE_MIN && w_strength >= TRIGGER_W_STRENGTH_MIN && w_recency > 0.0;
 
     if passes {
         DisruptionResult::triggered(w_source, w_strength, age_secs)
@@ -153,7 +155,7 @@ pub fn evaluate_with_weights(input: &DisruptionInput, sw: &SourceWeightsConfig) 
 }
 
 //
-// ------------------------------ TESTY ----------------------------------
+// ------------------------------ TESTS ----------------------------------
 //
 
 #[cfg(test)]
@@ -166,8 +168,8 @@ mod tests {
         let inp = DisruptionInput {
             source: "Trump".into(),
             text: "The economy is strong.".into(),
-            score: 3,     // síla ≈ 1.0
-            ts_unix: now, // čerstvé
+            score: 3,     // strength ≈ 1.0
+            ts_unix: now, // fresh
         };
         let res = evaluate(&inp);
         assert!(res.triggered);
@@ -179,7 +181,7 @@ mod tests {
     #[test]
     fn weak_or_old_does_not_trigger() {
         let now = now_unix();
-        // Slabé skóre
+        // Weak score
         let a = DisruptionInput {
             source: "Fed".into(),
             text: "We are monitoring.".into(),
@@ -188,7 +190,7 @@ mod tests {
         };
         assert!(!evaluate(&a).triggered);
 
-        // Staré (31 min)
+        // Old (31 min)
         let b = DisruptionInput {
             source: "Trump".into(),
             text: "Strong statement.".into(),
@@ -207,7 +209,7 @@ mod weight_integration_tests {
 
     fn cfg_with(source: &str, w: f32) -> SourceWeightsConfig {
         let mut weights = HashMap::new();
-        // ulož kanonicky – lowercase
+        // store canonically — lowercase
         weights.insert(source.to_ascii_lowercase(), w);
         SourceWeightsConfig {
             default_weight: 0.60,
@@ -218,23 +220,23 @@ mod weight_integration_tests {
 
     #[test]
     fn triggers_when_weight_and_strength_meet_thresholds() {
-        // w_source 0.90, score +2 => w_strength ~1.0, age 0 => mělo by TRIGGERNOUT
+        // w_source 0.90, score +2 => w_strength ~1.0, age 0 => should trigger
         let cfg = cfg_with("BigSource", 0.90);
         let input = DisruptionInput {
             source: "BigSource".into(),
             text: "Strong surge".into(),
-            score: 2, // díky STRENGTH_CAP=2 => w_strength=1.0
+            score: 2, // with STRENGTH_CAP=2 => w_strength=1.0
             ts_unix: now_unix(),
         };
         let res = evaluate_with_weights(&input, &cfg);
-        assert!(res.triggered, "mělo to triggernout");
+        assert!(res.triggered, "expected to trigger");
         assert!(res.w_source >= 0.90);
         assert!(res.w_strength >= 0.90);
     }
 
     #[test]
     fn does_not_trigger_if_source_weight_too_low() {
-        // w_source 0.70 (pod prahem), jinak silné => NEMÁ triggernout
+        // w_source 0.70 (below threshold), otherwise strong => must NOT trigger
         let cfg = cfg_with("LowSource", 0.70);
         let input = DisruptionInput {
             source: "LowSource".into(),
@@ -243,15 +245,15 @@ mod weight_integration_tests {
             ts_unix: now_unix(),
         };
         let res = evaluate_with_weights(&input, &cfg);
-        assert!(!res.triggered, "nemělo to triggernout kvůli nízké w_source");
+        assert!(!res.triggered, "should not trigger due to low w_source");
         assert!(res.w_source < 0.80);
-        assert!(res.w_strength >= 0.90); // síla je OK, ale zdroj zablokuje
+        assert!(res.w_strength >= 0.90); // strength OK, source blocks
     }
 
     #[test]
     fn does_not_trigger_if_too_old() {
         let cfg = cfg_with("Fed", 0.95);
-        let old_ts = now_unix().saturating_sub(31 * 60); // 31 min zpět
+        let old_ts = now_unix().saturating_sub(31 * 60); // 31 minutes ago
         let input = DisruptionInput {
             source: "Fed".into(),
             text: "Markets will crash".into(),
@@ -259,7 +261,7 @@ mod weight_integration_tests {
             ts_unix: old_ts,
         };
         let res = evaluate_with_weights(&input, &cfg);
-        assert!(!res.triggered, "nemělo to triggernout kvůli stáří výroku");
+        assert!(!res.triggered, "should not trigger due to age");
         assert!(res.w_source >= 0.90);
         assert!(res.w_strength >= 0.90);
         assert!(res.age_secs > 1800);
@@ -281,7 +283,7 @@ mod recency_tests {
             ts_unix: now - (20 * 60),
         };
         let res = evaluate_with_weights(&inp_20m, &SourceWeightsConfig::default_seed());
-        // Má to projít (≤ 30 min), jen s nižším recency weightem
+        // Should still pass (≤ 30 min), but with lower recency weight
         assert!(res.triggered);
     }
 
@@ -309,13 +311,13 @@ mod reload_like_test {
         let initial = SourceWeightsConfig::default_seed();
         let lock = Arc::new(RwLock::new(initial));
 
-        // čtení
+        // read
         {
             let g = lock.read().unwrap();
             assert!((g.weight_for("Trump") - 0.98).abs() < 1e-6);
         }
 
-        // zápis nového cfg (změňme třeba Trump->0.80)
+        // write a new cfg (e.g., Trump->0.80)
         let mut new = SourceWeightsConfig::default_seed();
         new.weights.insert("trump".to_string(), 0.80);
 
@@ -324,7 +326,7 @@ mod reload_like_test {
             *w = new;
         }
 
-        // ověř novou váhu
+        // verify updated weight
         {
             let g = lock.read().unwrap();
             assert!((g.weight_for("Trump") - 0.80).abs() < 1e-6);

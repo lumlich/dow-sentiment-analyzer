@@ -1,3 +1,23 @@
+# Rust
 /target
-.shuttle*
-Secrets*.toml
+**/*.rs.bk
+
+# Cargo
+# For apps we keep Cargo.lock tracked (do NOT ignore).
+# If you ever publish this as a library, you could ignore it:
+# Cargo.lock
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# Logs & temp
+*.log
+*.tmp
+
+# Shuttle
+# Keep .shuttle/ tracked (contains config), do NOT ignore it.

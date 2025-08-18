@@ -123,13 +123,7 @@ pub fn now_unix() -> u64 {
 }
 
 fn clamp01(x: f32) -> f32 {
-    if x < 0.0 {
-        0.0
-    } else if x > 1.0 {
-        1.0
-    } else {
-        x
-    }
+    x.clamp(0.0, 1.0)
 }
 
 /// Variant with externally provided weights (configurable without recompilation).

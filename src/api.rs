@@ -185,19 +185,18 @@ async fn decide_batch(
 
     // Add an explicit reason for transparency (re-using ReasonKind::Threshold for compatibility).
     decision.reasons.push(
-        crate::decision::Reason::new(format!(
-            "Volume context (last {}s): {} triggers from {} sources -> confidence x{:.3} ({}→{})",
-            VOLUME_WINDOW_SECS,
-            recent_triggers,
-            uniq_sources,
-            vf,
-            format!("{:.3}", old_conf),
-            format!("{:.3}", new_conf)
-        ))
-        .kind(crate::decision::ReasonKind::Threshold)
-        // Heuristic weight in 0..1 for UI sorting/visibility.
-        .weighted(((vf - 0.90) / (1.05 - 0.90)).clamp(0.0, 1.0) as f32),
-    );
+    crate::decision::Reason::new(format!(
+        "Volume context (last {window}s): {rt} triggers from {us} sources -> confidence x{vf:.3} ({old:.3}→{new:.3})",
+        window = VOLUME_WINDOW_SECS,
+        rt = recent_triggers,
+        us = uniq_sources,
+        vf = vf,
+        old = old_conf,
+        new = new_conf,
+    ))
+    .kind(crate::decision::ReasonKind::Threshold)
+    .weighted(((vf - 0.90) / (1.05 - 0.90)).clamp(0.0, 1.0)), // 0..1, no cast needed
+);
 
     // Only now append to history (store the final confidence).
     state.history.push(&decision);
@@ -240,13 +239,8 @@ fn volume_factor_from_history(hist: &History, now: u64) -> (f32, usize, usize) {
     let rt = recent_triggers.min(5) as f32;
     let us = uniq.len().min(5) as f32;
 
-    let mut vf = 0.90 + 0.02 * rt + 0.01 * us; // ∈ [0.90, 1.05]
-    if vf < 0.90 {
-        vf = 0.90;
-    }
-    if vf > 1.05 {
-        vf = 1.05;
-    }
+    let mut vf = 0.90 + 0.02 * rt + 0.01 * us;
+    vf = vf.clamp(0.90, 1.05);
 
     (vf, recent_triggers, uniq.len())
 }

@@ -1,5 +1,6 @@
 # dow-sentiment-analyzer
 ![CI](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/ci.yml/badge.svg)
+
 A sentiment analysis and decision engine for Dow Jones futures, built with Rust, Axum, and Tokio.
 
 It processes short texts (e.g., statements by Trump, the Fed, Yellen, Reuters, etc.), scores sentiment with a small lexicon + negation handling, applies **per-source weights**, and produces a transparent **BUY / HOLD / SELL** decision with confidence and human-readable reasons.
@@ -120,6 +121,12 @@ Response (example):
 
 ---
 
+## Project Roadmap
+The development is structured into 6 phases (Core logic, Frontend, Contextual rules, AI integration, Notifications, Stability & Ops).  
+See [Milestones](https://github.com/lumlich/dow-sentiment-analyzer/milestones) for detailed progress.
+
+---
+
 ## License & data note
 - Code: MIT.  
 - The included sentiment lexicon is a **custom list**, inspired by financial sentiment research (e.g., Loughran–McDonald), but **heavily adapted and extended** with our own terms.  
@@ -128,3 +135,4 @@ Response (example):
 ---
 
 **Contributions, ideas, and comments are welcome.**
+

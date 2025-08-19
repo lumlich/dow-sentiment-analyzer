@@ -1,9 +1,11 @@
-#![cfg(feature = "debug")]
-
+use std::{collections::VecDeque, sync::Mutex, time::Instant};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use shuttle_axum::axum::{extract::Query, routing::get, Json, Router};
-use std::{collections::VecDeque, sync::Mutex, time::Instant};
+use shuttle_axum::axum::{routing::get, extract::Query, Json, Router};
+
+const HISTORY_CAP: usize = 500;
+const LAT_CAP: usize = 200;
+const SLOW_REQ_MS: u128 = 1_000;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Decision {
@@ -23,9 +25,11 @@ pub struct Stats {
 }
 
 static HISTORY: Lazy<Mutex<VecDeque<Decision>>> =
-    Lazy::new(|| Mutex::new(VecDeque::with_capacity(500)));
-static STATS: Lazy<Mutex<Stats>> = Lazy::new(|| Mutex::new(Stats::default()));
-static LAT_MS: Lazy<Mutex<VecDeque<u128>>> = Lazy::new(|| Mutex::new(VecDeque::with_capacity(200)));
+    Lazy::new(|| Mutex::new(VecDeque::with_capacity(HISTORY_CAP)));
+static STATS: Lazy<Mutex<Stats>> =
+    Lazy::new(|| Mutex::new(Stats::default()));
+static LAT_MS: Lazy<Mutex<VecDeque<u128>>> =
+    Lazy::new(|| Mutex::new(VecDeque::with_capacity(LAT_CAP)));
 
 #[derive(Deserialize)]
 pub struct HistoryQuery {
@@ -50,7 +54,7 @@ pub fn record_request(is_batch: bool) {
 
 pub fn record_latency(lat_ms: u128) {
     let mut q = LAT_MS.lock().unwrap();
-    if q.len() == q.capacity() {
+    if q.len() >= LAT_CAP {
         q.pop_front();
     }
     q.push_back(lat_ms);
@@ -59,15 +63,14 @@ pub fn record_latency(lat_ms: u128) {
     let sum: u128 = q.iter().copied().sum();
     s.rolling_avg_ms = Some(sum as f64 / q.len() as f64);
 
-    // velmi jednoduchá “disruption”: nad 1000 ms
-    if lat_ms > 1000 {
+    if lat_ms > SLOW_REQ_MS {
         s.last_disruption_ms = Some(lat_ms);
     }
 }
 
 pub fn record_decision(source: String, score: i32, verdict: String) {
     let mut h = HISTORY.lock().unwrap();
-    if h.len() == h.capacity() {
+    if h.len() >= HISTORY_CAP {
         h.pop_front();
     }
     h.push_back(Decision {
@@ -91,7 +94,6 @@ async fn stats() -> Json<Stats> {
 }
 
 fn now_ms() -> u128 {
-    // jednoduché “now” – v reálu klidně SystemTime::now()
     static START: Lazy<Instant> = Lazy::new(Instant::now);
     START.elapsed().as_millis()
 }

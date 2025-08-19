@@ -1,0 +1,8 @@
+# .gitattributes (put this file in your project root)
+
+# Normalize line endings for text files
+* text=auto
+
+# (Optional) If you ever add large data files, consider Git LFS:
+#*.csv filter=lfs diff=lfs merge=lfs -text
+#*.bin filter=lfs diff=lfs merge=lfs -text

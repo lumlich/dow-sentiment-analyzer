@@ -134,5 +134,10 @@ See [Milestones](https://github.com/lumlich/dow-sentiment-analyzer/milestones) f
 
 ---
 
+## Contributing
+Open an Issue with `feat:` or `bug:` prefix; PRs welcome.  
+See [Issues](../../issues) and [Milestones](../../milestones).
+
+---
 **Contributions, ideas, and comments are welcome.**
 

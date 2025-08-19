@@ -16,7 +16,7 @@ It processes short texts (e.g., statements by Trump, the Fed, Yellen, Reuters, e
 ---
 
 ## Quickstart (local dev with Shuttle)
-```bash
+```
 # clone and enter
 git clone https://github.com/lumlich/dow-sentiment-analyzer.git
 cd dow-sentiment-analyzer
@@ -28,3 +28,91 @@ cargo test
 
 # run locally (Shuttle dev runtime)
 cargo shuttle run
+```
+
+---
+
+## Usage (API examples)
+
+### GET /health
+```
+curl -s http://localhost:8000/health
+```
+Response:
+```
+ok
+```
+
+### POST /analyze
+```
+curl -s -X POST http://localhost:8000/analyze   -H "Content-Type: application/json"   -d '{
+    "text": "Fed signals a cautious path to rate cuts this year.",
+    "source": "Fed",
+    "timestamp": "2025-08-18T12:45:00Z"
+  }'
+```
+Response (example):
+```
+{
+  "score": 2,
+  "tokens_count": 9,
+  "sentiment": "positive",
+  "decision": "BUY",
+  "confidence": 0.72,
+  "reasons": [
+    "Positive tokens outweigh negatives",
+    "High source weight for 'Fed'",
+    "Recent statement increases effect"
+  ],
+  "meta": {
+    "source": "Fed",
+    "source_weight": 1.6,
+    "negated_tokens": [],
+    "disruption": 0.58,
+    "timestamp": "2025-08-18T12:45:00Z"
+  }
+}
+```
+
+### POST /batch
+```
+curl -s -X POST http://localhost:8000/batch   -H "Content-Type: application/json"   -d '{
+    "items": [
+      {
+        "id": "a1",
+        "text": "Trump says Dow will soar.",
+        "source": "Trump",
+        "timestamp": "2025-08-18T10:05:00Z"
+      },
+      {
+        "id": "b2",
+        "text": "Reuters: unexpected slowdown in manufacturing.",
+        "source": "Reuters",
+        "timestamp": "2025-08-18T10:10:00Z"
+      }
+    ]
+  }'
+```
+Response (example):
+```
+{
+  "results": [
+    {
+      "id": "a1",
+      "score": 1,
+      "sentiment": "positive",
+      "decision": "BUY",
+      "confidence": 0.63,
+      "meta": { "source": "Trump", "source_weight": 1.4, "disruption": 0.44 }
+    },
+    {
+      "id": "b2",
+      "score": -2,
+      "sentiment": "negative",
+      "decision": "SELL",
+      "confidence": 0.69,
+      "meta": { "source": "Reuters", "source_weight": 0.9, "disruption": 0.51 }
+    }
+  ]
+}
+```

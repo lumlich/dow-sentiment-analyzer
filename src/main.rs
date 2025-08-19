@@ -19,6 +19,7 @@ mod history;
 mod rolling;
 mod sentiment;
 mod source_weights;
+pub mod debug;
 
 use shuttle_axum::ShuttleAxum;
 

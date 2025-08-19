@@ -1,0 +1,18 @@
+# .dockerignore (put this file in your project root)
+# Git & CI
+.git
+.github
+.gitignore
+
+# Rust build output
+target
+
+# Editors / OS
+.vscode
+.idea
+.DS_Store
+
+# Logs & local env
+*.log
+.env
+.env.*

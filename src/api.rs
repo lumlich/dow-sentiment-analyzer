@@ -12,6 +12,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+#[cfg(feature = "debug")]
+use std::time::Instant;
+
 use shuttle_axum::axum::{
     extract::{Query, State},
     routing::{get, post},
@@ -58,7 +61,7 @@ pub fn create_router() -> Router {
         source_weights: Arc::new(RwLock::new(sw)),
     };
 
-    Router::new()
+    let r = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/analyze", post(analyze))
         .route("/batch", post(analyze_batch))
@@ -72,7 +75,13 @@ pub fn create_router() -> Router {
             get(admin_reload_source_weights),
         )
         .layer(CorsLayer::very_permissive())
-        .with_state(state)
+        .with_state(state);
+
+    // /history a /stats jen při --features debug
+    #[cfg(feature = "debug")]
+    let r = r.merge(crate::debug::router());
+
+    r
 }
 
 /// Request body for `/analyze`.
@@ -104,11 +113,22 @@ struct AnalyzeResp {
 }
 
 /// Analyze a single text and return a signed sentiment score.
-///
-/// Returns `200 OK` with JSON `{ "score": i32, "tokens_count": usize }`.
 async fn analyze(State(state): State<AppState>, Json(body): Json<AnalyzeReq>) -> Json<AnalyzeResp> {
+    #[cfg(feature = "debug")]
+    let t0 = Instant::now();
+    #[cfg(feature = "debug")]
+    crate::debug::record_request(false);
+
     let (score, tokens) = state.analyzer.score_text(&body.text);
     state.rolling.record(score, None);
+
+    #[cfg(feature = "debug")]
+    {
+        let verdict = if score >= 0 { "BUY" } else { "SELL" };
+        crate::debug::record_decision("analyze".to_string(), score, verdict.to_string());
+        crate::debug::record_latency(t0.elapsed().as_millis());
+    }
+
     Json(AnalyzeResp {
         score,
         tokens_count: tokens,
@@ -116,13 +136,15 @@ async fn analyze(State(state): State<AppState>, Json(body): Json<AnalyzeReq>) ->
 }
 
 /// Analyze multiple texts and return `(item, score)` pairs.
-///
-/// Each item is recorded into the rolling statistics and passed through
-/// disruption heuristics (result discarded here; used only for side-effects/metrics).
 async fn analyze_batch(
     State(state): State<AppState>,
     Json(items): Json<Vec<BatchItem>>,
 ) -> Json<Vec<(BatchItem, i32)>> {
+    #[cfg(feature = "debug")]
+    let t0 = Instant::now();
+    #[cfg(feature = "debug")]
+    crate::debug::record_request(true);
+
     let scored = items
         .into_iter()
         .map(|it| {
@@ -137,17 +159,33 @@ async fn analyze_batch(
             (it, score)
         })
         .collect::<Vec<_>>();
+
+    #[cfg(feature = "debug")]
+    {
+        let avg: i32 = if scored.is_empty() {
+            0
+        } else {
+            let sum: i64 = scored.iter().map(|(_, s)| *s as i64).sum();
+            (sum / scored.len() as i64) as i32
+        };
+        let verdict = if avg >= 0 { "BUY" } else { "SELL" };
+        crate::debug::record_decision("batch".to_string(), avg, verdict.to_string());
+        crate::debug::record_latency(t0.elapsed().as_millis());
+    }
+
     Json(scored)
 }
 
-/// Decide an action from a batch of inputs, applying per-source weights and
-/// recent volume context to adjust confidence.
-///
-/// The decision is appended to history after confidence adjustments.
+/// Decide an action from a batch of inputs, applying per-source weights and recent volume context.
 async fn decide_batch(
     State(state): State<AppState>,
     Json(items): Json<Vec<DecideItem>>,
 ) -> Json<Decision> {
+    #[cfg(feature = "debug")]
+    let t0 = Instant::now();
+    #[cfg(feature = "debug")]
+    crate::debug::record_request(true);
+
     let now = current_unix();
 
     let mut scored = Vec::with_capacity(items.len());
@@ -183,23 +221,38 @@ async fn decide_batch(
     let new_conf = (old_conf * vf).clamp(0.0, 0.99);
     decision.confidence = new_conf;
 
-    // Add an explicit reason for transparency (re-using ReasonKind::Threshold for compatibility).
+    // Add an explicit reason for transparency.
     decision.reasons.push(
-    crate::decision::Reason::new(format!(
-        "Volume context (last {window}s): {rt} triggers from {us} sources -> confidence x{vf:.3} ({old:.3}→{new:.3})",
-        window = VOLUME_WINDOW_SECS,
-        rt = recent_triggers,
-        us = uniq_sources,
-        vf = vf,
-        old = old_conf,
-        new = new_conf,
-    ))
-    .kind(crate::decision::ReasonKind::Threshold)
-    .weighted(((vf - 0.90) / (1.05 - 0.90)).clamp(0.0, 1.0)), // 0..1, no cast needed
-);
+        crate::decision::Reason::new(format!(
+            "Volume context (last {window}s): {rt} triggers from {us} sources -> confidence x{vf:.3} ({old:.3}→{new:.3})",
+            window = VOLUME_WINDOW_SECS,
+            rt = recent_triggers,
+            us = uniq_sources,
+            vf = vf,
+            old = old_conf,
+            new = new_conf,
+        ))
+        .kind(crate::decision::ReasonKind::Threshold)
+        .weighted(((vf - 0.90) / (1.05 - 0.90)).clamp(0.0, 1.0)),
+    );
 
-    // Only now append to history (store the final confidence).
+    // Persist after adjustments.
     state.history.push(&decision);
+
+    #[cfg(feature = "debug")]
+    {
+        // verdict: z enumu, score: průměr z tohoto requestu
+        let verdict = format!("{:?}", decision.decision).to_uppercase();
+        let avg: i32 = if scored.is_empty() {
+            0
+        } else {
+            let sum: i64 = scored.iter().map(|(_, s, _)| *s as i64).sum();
+            (sum / scored.len() as i64) as i32
+        };
+        crate::debug::record_decision("decide".to_string(), avg, verdict);
+        crate::debug::record_latency(t0.elapsed().as_millis());
+    }
+
     Json(decision)
 }
 
@@ -222,13 +275,11 @@ fn volume_factor_from_history(hist: &History, now: u64) -> (f32, usize, usize) {
 
     for h in rows {
         if now.saturating_sub(h.ts_unix) <= VOLUME_WINDOW_SECS {
-            // Consider only BUY or SELL as "triggers".
             if matches!(
                 h.verdict,
                 crate::decision::Verdict::Buy | crate::decision::Verdict::Sell
             ) {
                 recent_triggers += 1;
-                // Collect top sources (direction-agnostic).
                 for s in h.top_sources.iter().take(5) {
                     uniq.insert(s.clone());
                 }
@@ -331,8 +382,6 @@ async fn debug_source_weight(
 }
 
 /// Reload the `source_weights.json` file into memory.
-///
-/// This is a simple, best-effort operation and returns a plain string result.
 async fn admin_reload_source_weights(State(state): State<AppState>) -> String {
     let fresh = SourceWeightsConfig::load_from_file("source_weights.json");
     match state.source_weights.write() {

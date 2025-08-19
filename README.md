@@ -117,3 +117,14 @@ Response (example):
   ]
 }
 ```
+
+---
+
+## License & data note
+- Code: MIT.  
+- The included sentiment lexicon is a **custom list**, inspired by financial sentiment research (e.g., Loughran–McDonald), but **heavily adapted and extended** with our own terms.  
+- It should be treated as an independent resource, not a redistribution of the original L-M dataset.  
+
+---
+
+**Contributions, ideas, and comments are welcome.**

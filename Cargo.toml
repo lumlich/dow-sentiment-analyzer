@@ -28,3 +28,7 @@ shuttle-axum = "0.56.0"
 
 # Optional: Uncomment if external API calls are needed
 # reqwest = { version = "0.12", features = ["json"] }
+
+[features]
+default = []
+debug = []

@@ -1,7 +1,7 @@
-use std::{collections::VecDeque, sync::Mutex, time::Instant};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use shuttle_axum::axum::{routing::get, extract::Query, Json, Router};
+use shuttle_axum::axum::{extract::Query, routing::get, Json, Router};
+use std::{collections::VecDeque, sync::Mutex, time::Instant};
 
 const HISTORY_CAP: usize = 500;
 const LAT_CAP: usize = 200;
@@ -26,8 +26,7 @@ pub struct Stats {
 
 static HISTORY: Lazy<Mutex<VecDeque<Decision>>> =
     Lazy::new(|| Mutex::new(VecDeque::with_capacity(HISTORY_CAP)));
-static STATS: Lazy<Mutex<Stats>> =
-    Lazy::new(|| Mutex::new(Stats::default()));
+static STATS: Lazy<Mutex<Stats>> = Lazy::new(|| Mutex::new(Stats::default()));
 static LAT_MS: Lazy<Mutex<VecDeque<u128>>> =
     Lazy::new(|| Mutex::new(VecDeque::with_capacity(LAT_CAP)));
 

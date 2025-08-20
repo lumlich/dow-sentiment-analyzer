@@ -12,6 +12,7 @@
 //! See `README.md` for quickstart and `docs/` for architecture notes.
 
 mod api;
+pub mod debug;
 mod decision;
 mod disruption;
 mod engine;
@@ -19,7 +20,6 @@ mod history;
 mod rolling;
 mod sentiment;
 mod source_weights;
-pub mod debug;
 
 use shuttle_axum::ShuttleAxum;
 

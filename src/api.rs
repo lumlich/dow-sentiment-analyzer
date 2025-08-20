@@ -31,7 +31,9 @@ pub struct AppState {
 }
 
 fn debug_enabled() -> bool {
-    std::env::var("SHUTTLE_ENV").map(|v| v == "local").unwrap_or(false)
+    std::env::var("SHUTTLE_ENV")
+        .map(|v| v == "local")
+        .unwrap_or(false)
 }
 
 pub fn create_router() -> Router {
@@ -53,7 +55,10 @@ pub fn create_router() -> Router {
         .route("/debug/history", get(debug_history))
         .route("/debug/last-decision", get(debug_last_decision))
         .route("/debug/source-weight", get(debug_source_weight))
-        .route("/admin/reload-source-weights", get(admin_reload_source_weights))
+        .route(
+            "/admin/reload-source-weights",
+            get(admin_reload_source_weights),
+        )
         .layer(CorsLayer::very_permissive())
         .with_state(state);
 
@@ -67,7 +72,9 @@ pub fn create_router() -> Router {
 }
 
 #[derive(serde::Deserialize)]
-struct AnalyzeReq { text: String }
+struct AnalyzeReq {
+    text: String,
+}
 
 #[derive(serde::Deserialize)]
 struct DecideItem {
@@ -78,11 +85,16 @@ struct DecideItem {
 }
 
 #[derive(serde::Serialize)]
-struct AnalyzeResp { score: i32, tokens_count: usize }
+struct AnalyzeResp {
+    score: i32,
+    tokens_count: usize,
+}
 
 async fn analyze(State(state): State<AppState>, Json(body): Json<AnalyzeReq>) -> Json<AnalyzeResp> {
     let t0 = Instant::now();
-    if debug_enabled() { crate::debug::record_request(false); }
+    if debug_enabled() {
+        crate::debug::record_request(false);
+    }
 
     let (score, tokens) = state.analyzer.score_text(&body.text);
     state.rolling.record(score, None);
@@ -93,7 +105,10 @@ async fn analyze(State(state): State<AppState>, Json(body): Json<AnalyzeReq>) ->
         crate::debug::record_latency(t0.elapsed().as_millis());
     }
 
-    Json(AnalyzeResp { score, tokens_count: tokens })
+    Json(AnalyzeResp {
+        score,
+        tokens_count: tokens,
+    })
 }
 
 async fn analyze_batch(
@@ -101,22 +116,29 @@ async fn analyze_batch(
     Json(items): Json<Vec<BatchItem>>,
 ) -> Json<Vec<(BatchItem, i32)>> {
     let t0 = Instant::now();
-    if debug_enabled() { crate::debug::record_request(true); }
+    if debug_enabled() {
+        crate::debug::record_request(true);
+    }
 
-    let scored = items.into_iter().map(|it| {
-        let (score, _) = state.analyzer.score_text(&it.text);
-        state.rolling.record(score, None);
-        let _ = disruption::evaluate(&DisruptionInput {
-            source: it.source.clone(),
-            text: it.text.clone(),
-            score,
-            ts_unix: current_unix(),
-        });
-        (it, score)
-    }).collect::<Vec<_>>();
+    let scored = items
+        .into_iter()
+        .map(|it| {
+            let (score, _) = state.analyzer.score_text(&it.text);
+            state.rolling.record(score, None);
+            let _ = disruption::evaluate(&DisruptionInput {
+                source: it.source.clone(),
+                text: it.text.clone(),
+                score,
+                ts_unix: current_unix(),
+            });
+            (it, score)
+        })
+        .collect::<Vec<_>>();
 
     if debug_enabled() {
-        let avg: i32 = if scored.is_empty() { 0 } else {
+        let avg: i32 = if scored.is_empty() {
+            0
+        } else {
             let sum: i64 = scored.iter().map(|(_, s)| *s as i64).sum();
             (sum / scored.len() as i64) as i32
         };
@@ -133,7 +155,9 @@ async fn decide_batch(
     Json(items): Json<Vec<DecideItem>>,
 ) -> Json<Decision> {
     let t0 = Instant::now();
-    if debug_enabled() { crate::debug::record_request(true); }
+    if debug_enabled() {
+        crate::debug::record_request(true);
+    }
 
     let now = current_unix();
     let mut scored = Vec::with_capacity(items.len());
@@ -143,13 +167,21 @@ async fn decide_batch(
         state.rolling.record(score, None);
         let ts = it.ts_unix.unwrap_or(now);
 
-        let di = DisruptionInput { source: it.source.clone(), text: it.text.clone(), score, ts_unix: ts };
+        let di = DisruptionInput {
+            source: it.source.clone(),
+            text: it.text.clone(),
+            score,
+            ts_unix: ts,
+        };
         let res = {
             let guard = state.source_weights.read().expect("rwlock poisoned");
             evaluate_with_weights(&di, &guard)
         };
 
-        let bi = BatchItem { source: it.source, text: it.text };
+        let bi = BatchItem {
+            source: it.source,
+            text: it.text,
+        };
         scored.push((bi, score, res));
     }
 
@@ -173,7 +205,9 @@ async fn decide_batch(
 
     if debug_enabled() {
         let verdict = format!("{:?}", decision.decision).to_uppercase();
-        let avg: i32 = if scored.is_empty() { 0 } else {
+        let avg: i32 = if scored.is_empty() {
+            0
+        } else {
             let sum: i64 = scored.iter().map(|(_, s, _)| *s as i64).sum();
             (sum / scored.len() as i64) as i32
         };
@@ -186,7 +220,10 @@ async fn decide_batch(
 
 fn current_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn volume_factor_from_history(hist: &History, now: u64) -> (f32, usize, usize) {
@@ -196,9 +233,14 @@ fn volume_factor_from_history(hist: &History, now: u64) -> (f32, usize, usize) {
 
     for h in rows {
         if now.saturating_sub(h.ts_unix) <= VOLUME_WINDOW_SECS {
-            if matches!(h.verdict, crate::decision::Verdict::Buy | crate::decision::Verdict::Sell) {
+            if matches!(
+                h.verdict,
+                crate::decision::Verdict::Buy | crate::decision::Verdict::Sell
+            ) {
                 recent_triggers += 1;
-                for s in h.top_sources.iter().take(5) { uniq.insert(s.clone()); }
+                for s in h.top_sources.iter().take(5) {
+                    uniq.insert(s.clone());
+                }
             }
         }
     }
@@ -211,29 +253,53 @@ fn volume_factor_from_history(hist: &History, now: u64) -> (f32, usize, usize) {
 }
 
 #[derive(serde::Serialize)]
-struct RollingInfo { window_secs: u64, average: f32, count: usize }
+struct RollingInfo {
+    window_secs: u64,
+    average: f32,
+    count: usize,
+}
 
 async fn debug_rolling(State(state): State<AppState>) -> Json<RollingInfo> {
     let (avg, n) = state.rolling.average_and_count();
-    Json(RollingInfo { window_secs: state.rolling.window_secs(), average: avg, count: n })
+    Json(RollingInfo {
+        window_secs: state.rolling.window_secs(),
+        average: avg,
+        count: n,
+    })
 }
 
 #[derive(serde::Serialize)]
-struct HistoryOut { ts_unix: u64, verdict: String, confidence: f32, sources: Vec<String>, scores: Vec<i32> }
+struct HistoryOut {
+    ts_unix: u64,
+    verdict: String,
+    confidence: f32,
+    sources: Vec<String>,
+    scores: Vec<i32>,
+}
 
 async fn debug_history(State(state): State<AppState>) -> Json<Vec<HistoryOut>> {
     let rows = state.history.snapshot_last_n(10);
-    Json(rows.into_iter().map(|h| HistoryOut {
-        ts_unix: h.ts_unix,
-        verdict: format!("{:?}", h.verdict).to_uppercase(),
-        confidence: h.confidence,
-        sources: h.top_sources,
-        scores: h.top_scores,
-    }).collect())
+    Json(
+        rows.into_iter()
+            .map(|h| HistoryOut {
+                ts_unix: h.ts_unix,
+                verdict: format!("{:?}", h.verdict).to_uppercase(),
+                confidence: h.confidence,
+                sources: h.top_sources,
+                scores: h.top_scores,
+            })
+            .collect(),
+    )
 }
 
 #[derive(serde::Serialize)]
-struct LastOut { ts_unix: u64, verdict: String, confidence: f32, sources: Vec<String>, scores: Vec<i32> }
+struct LastOut {
+    ts_unix: u64,
+    verdict: String,
+    confidence: f32,
+    sources: Vec<String>,
+    scores: Vec<i32>,
+}
 
 async fn debug_last_decision(State(state): State<AppState>) -> Json<Option<LastOut>> {
     let mut rows = state.history.snapshot_last_n(1);
@@ -264,7 +330,10 @@ async fn debug_source_weight(
 async fn admin_reload_source_weights(State(state): State<AppState>) -> String {
     let fresh = SourceWeightsConfig::load_from_file("source_weights.json");
     match state.source_weights.write() {
-        Ok(mut w) => { *w = fresh; "reloaded".to_string() }
+        Ok(mut w) => {
+            *w = fresh;
+            "reloaded".to_string()
+        }
         Err(_) => "failed: lock poisoned".to_string(),
     }
 }

@@ -62,13 +62,11 @@ pub fn create_router() -> Router {
         .layer(CorsLayer::very_permissive())
         .with_state(state);
 
-    let r = if debug_enabled() {
+    if debug_enabled() {
         r.merge(crate::debug::router())
     } else {
         r
-    };
-
-    r
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -232,15 +230,15 @@ fn volume_factor_from_history(hist: &History, now: u64) -> (f32, usize, usize) {
     let mut uniq = std::collections::HashSet::new();
 
     for h in rows {
-        if now.saturating_sub(h.ts_unix) <= VOLUME_WINDOW_SECS {
-            if matches!(
+        if now.saturating_sub(h.ts_unix) <= VOLUME_WINDOW_SECS
+            && matches!(
                 h.verdict,
                 crate::decision::Verdict::Buy | crate::decision::Verdict::Sell
-            ) {
-                recent_triggers += 1;
-                for s in h.top_sources.iter().take(5) {
-                    uniq.insert(s.clone());
-                }
+            )
+        {
+            recent_triggers += 1;
+            for s in h.top_sources.iter().take(5) {
+                uniq.insert(s.clone());
             }
         }
     }
@@ -249,6 +247,7 @@ fn volume_factor_from_history(hist: &History, now: u64) -> (f32, usize, usize) {
     let us = uniq.len().min(5) as f32;
     let mut vf = 0.90 + 0.02 * rt + 0.01 * us;
     vf = vf.clamp(0.90, 1.05);
+
     (vf, recent_triggers, uniq.len())
 }
 

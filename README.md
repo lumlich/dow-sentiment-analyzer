@@ -1,8 +1,6 @@
 # dow-sentiment-analyzer
 
-[![CI](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/ci.yml/badge.svg)]
-
-(https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/ci.yml)
+[![CI](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/ci.yml)
 
 A sentiment analysis and decision engine for Dow Jones futures, built with Rust, Axum, and Tokio.
 
@@ -21,7 +19,7 @@ It processes short texts (e.g., statements by Trump, the Fed, Yellen, Reuters, e
 ---
 
 ## Quickstart (local dev with Shuttle)
-```
+```bash
 # clone and enter
 git clone https://github.com/lumlich/dow-sentiment-analyzer.git
 cd dow-sentiment-analyzer
@@ -40,7 +38,7 @@ cargo shuttle run
 ## Usage (API examples)
 
 ### GET /health
-```
+```bash
 curl -s http://localhost:8000/health
 ```
 Response:
@@ -49,15 +47,17 @@ ok
 ```
 
 ### POST /analyze
-```
-curl -s -X POST http://localhost:8000/analyze   -H "Content-Type: application/json"   -d '{
+```bash
+curl -s -X POST http://localhost:8000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
     "text": "Fed signals a cautious path to rate cuts this year.",
     "source": "Fed",
     "timestamp": "2025-08-18T12:45:00Z"
   }'
 ```
 Response (example):
-```
+```json
 {
   "score": 2,
   "tokens_count": 9,
@@ -80,8 +80,10 @@ Response (example):
 ```
 
 ### POST /batch
-```
-curl -s -X POST http://localhost:8000/batch   -H "Content-Type: application/json"   -d '{
+```bash
+curl -s -X POST http://localhost:8000/batch \
+  -H "Content-Type: application/json" \
+  -d '{
     "items": [
       {
         "id": "a1",
@@ -99,7 +101,7 @@ curl -s -X POST http://localhost:8000/batch   -H "Content-Type: application/json
   }'
 ```
 Response (example):
-```
+```json
 {
   "results": [
     {
@@ -143,4 +145,3 @@ See [Issues](../../issues) and [Milestones](../../milestones).
 
 ---
 **Contributions, ideas, and comments are welcome.**
-

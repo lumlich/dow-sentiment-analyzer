@@ -1,12 +1,11 @@
-//! # HTTP API Layer
-//! (viz dřívější komentáře)
+//! HTTP API Layer
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use shuttle_axum::axum::{
-    extract::{Query, State},
+    extract::{Extension, Query},
     routing::{get, post},
     Json, Router,
 };
@@ -20,14 +19,24 @@ use crate::rolling::RollingWindow;
 use crate::sentiment::{BatchItem, SentimentAnalyzer};
 use crate::source_weights::SourceWeightsConfig;
 
+// bring relevance types/helpers (engine/handle/state + dev logs)
+use crate::relevance::{
+    anon_hash, dev_logging_enabled, truncate_vec, AppState as RelevanceAppState, RelevanceHandle,
+};
+
+// tracing for dev-only audit logs
+use tracing::info;
+
 const VOLUME_WINDOW_SECS: u64 = 600; // 10 min
 
+/// Internal API state used by handlers (wrapped in Arc and injected via Extension).
 #[derive(Clone)]
-pub struct AppState {
+pub struct ApiState {
     analyzer: Arc<SentimentAnalyzer>,
     rolling: Arc<RollingWindow>,
     history: Arc<History>,
     source_weights: Arc<RwLock<SourceWeightsConfig>>,
+    relevance: RelevanceHandle,
 }
 
 fn debug_enabled() -> bool {
@@ -36,17 +45,23 @@ fn debug_enabled() -> bool {
         .unwrap_or(false)
 }
 
-pub fn create_router() -> Router {
+/// Build the Router. Accepts the AppState from `main.rs` (with a configured RelevanceHandle).
+/// Returns `Router<()>` and injects `Arc<ApiState>` via `Extension`.
+pub fn create_router(state_from_main: RelevanceAppState) -> Router<()> {
+    // Load source weights from file
     let sw = SourceWeightsConfig::load_from_file("source_weights.json");
 
-    let state = AppState {
+    // Build full API state (reuse the relevance handle provided by main)
+    let state = Arc::new(ApiState {
         analyzer: Arc::new(SentimentAnalyzer::new()),
         rolling: Arc::new(RollingWindow::new_48h()),
         history: Arc::new(History::with_capacity(2000)),
         source_weights: Arc::new(RwLock::new(sw)),
-    };
+        relevance: state_from_main.relevance, // <-- from main.rs
+    });
 
-    let r = Router::new()
+    // Base Router with explicit unit state
+    let mut app: Router<()> = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/analyze", post(analyze))
         .route("/batch", post(analyze_batch))
@@ -58,15 +73,17 @@ pub fn create_router() -> Router {
         .route(
             "/admin/reload-source-weights",
             get(admin_reload_source_weights),
-        )
-        .layer(CorsLayer::very_permissive())
-        .with_state(state);
+        );
 
+    // Optionally merge debug router (keeps Router<()>)
     if debug_enabled() {
-        r.merge(crate::debug::router())
-    } else {
-        r
+        let dbg: Router<()> = crate::debug::router();
+        app = app.merge(dbg);
     }
+
+    // Layers last — they do not change router state type
+    app.layer(CorsLayer::very_permissive())
+        .layer(Extension(state))
 }
 
 #[derive(serde::Deserialize)]
@@ -88,7 +105,10 @@ struct AnalyzeResp {
     tokens_count: usize,
 }
 
-async fn analyze(State(state): State<AppState>, Json(body): Json<AnalyzeReq>) -> Json<AnalyzeResp> {
+async fn analyze(
+    Extension(state): Extension<Arc<ApiState>>,
+    Json(body): Json<AnalyzeReq>,
+) -> Json<AnalyzeResp> {
     let t0 = Instant::now();
     if debug_enabled() {
         crate::debug::record_request(false);
@@ -110,7 +130,7 @@ async fn analyze(State(state): State<AppState>, Json(body): Json<AnalyzeReq>) ->
 }
 
 async fn analyze_batch(
-    State(state): State<AppState>,
+    Extension(state): Extension<Arc<ApiState>>,
     Json(items): Json<Vec<BatchItem>>,
 ) -> Json<Vec<(BatchItem, i32)>> {
     let t0 = Instant::now();
@@ -149,7 +169,7 @@ async fn analyze_batch(
 }
 
 async fn decide_batch(
-    State(state): State<AppState>,
+    Extension(state): Extension<Arc<ApiState>>,
     Json(items): Json<Vec<DecideItem>>,
 ) -> Json<Decision> {
     let t0 = Instant::now();
@@ -160,15 +180,48 @@ async fn decide_batch(
     let now = current_unix();
     let mut scored = Vec::with_capacity(items.len());
 
+    let mut neutralized = 0usize;
+    let total = items.len();
+
     for it in items {
-        let (score, _tokens) = state.analyzer.score_text(&it.text);
-        state.rolling.record(score, None);
+        // 1) Raw sentiment
+        let (raw_score, _tokens) = state.analyzer.score_text(&it.text);
+
+        // 2) Relevance gate
+        let rel = state.relevance.score(&it.text);
+        let gated_score = if rel.score > 0.0 { raw_score } else { 0 };
+
+        // --- dev-only relevance audit log (anonymized) ---
+        if dev_logging_enabled() {
+            let event = if rel.score > 0.0 {
+                "api_pass"
+            } else {
+                "api_neutralized"
+            };
+            info!(
+                target: "relevance",
+                event,
+                id = %anon_hash(&it.text),                   // no raw text
+                matched = ?truncate_vec(&rel.matched, 5),
+                reasons = ?truncate_vec(&rel.reasons, 5),
+                rel_score = rel.score,
+                raw = raw_score,
+                gated = gated_score
+            );
+        }
+
+        if gated_score == 0 && raw_score != 0 {
+            neutralized += 1;
+        }
+
+        // 3) Record & disruption with gated score
+        state.rolling.record(gated_score, None);
         let ts = it.ts_unix.unwrap_or(now);
 
         let di = DisruptionInput {
             source: it.source.clone(),
             text: it.text.clone(),
-            score,
+            score: gated_score,
             ts_unix: ts,
         };
         let res = {
@@ -180,11 +233,13 @@ async fn decide_batch(
             source: it.source,
             text: it.text,
         };
-        scored.push((bi, score, res));
+        scored.push((bi, gated_score, res));
     }
 
+    // 4) Decision from gated inputs
     let mut decision = engine::make_decision(&scored);
 
+    // 5) Volume context modifier
     let (vf, recent_triggers, uniq_sources) = volume_factor_from_history(&state.history, now);
     let old_conf = decision.confidence;
     let new_conf = (old_conf * vf).clamp(0.0, 0.99);
@@ -199,6 +254,20 @@ async fn decide_batch(
         .weighted(((vf - 0.90) / (1.05 - 0.90)).clamp(0.0, 1.0)),
     );
 
+    // 6) Relevance-gate note
+    if neutralized > 0 && total > 0 {
+        let frac = neutralized as f32 / total as f32;
+        decision.reasons.push(
+            crate::decision::Reason::new(format!(
+                "Relevance gate neutralized {}/{} items before decision",
+                neutralized, total
+            ))
+            .kind(crate::decision::ReasonKind::Threshold)
+            .weighted(frac.clamp(0.0, 1.0)),
+        );
+    }
+
+    // 7) Persist decision
     state.history.push(&decision);
 
     if debug_enabled() {
@@ -258,7 +327,7 @@ struct RollingInfo {
     count: usize,
 }
 
-async fn debug_rolling(State(state): State<AppState>) -> Json<RollingInfo> {
+async fn debug_rolling(Extension(state): Extension<Arc<ApiState>>) -> Json<RollingInfo> {
     let (avg, n) = state.rolling.average_and_count();
     Json(RollingInfo {
         window_secs: state.rolling.window_secs(),
@@ -276,7 +345,7 @@ struct HistoryOut {
     scores: Vec<i32>,
 }
 
-async fn debug_history(State(state): State<AppState>) -> Json<Vec<HistoryOut>> {
+async fn debug_history(Extension(state): Extension<Arc<ApiState>>) -> Json<Vec<HistoryOut>> {
     let rows = state.history.snapshot_last_n(10);
     Json(
         rows.into_iter()
@@ -300,7 +369,7 @@ struct LastOut {
     scores: Vec<i32>,
 }
 
-async fn debug_last_decision(State(state): State<AppState>) -> Json<Option<LastOut>> {
+async fn debug_last_decision(Extension(state): Extension<Arc<ApiState>>) -> Json<Option<LastOut>> {
     let mut rows = state.history.snapshot_last_n(1);
     if let Some(h) = rows.pop() {
         return Json(Some(LastOut {
@@ -315,7 +384,7 @@ async fn debug_last_decision(State(state): State<AppState>) -> Json<Option<LastO
 }
 
 async fn debug_source_weight(
-    State(state): State<AppState>,
+    Extension(state): Extension<Arc<ApiState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> String {
     let s = q.get("source").cloned().unwrap_or_default();
@@ -326,7 +395,7 @@ async fn debug_source_weight(
     format!("source='{}' -> weight={:.2}", s, w)
 }
 
-async fn admin_reload_source_weights(State(state): State<AppState>) -> String {
+async fn admin_reload_source_weights(Extension(state): Extension<Arc<ApiState>>) -> String {
     let fresh = SourceWeightsConfig::load_from_file("source_weights.json");
     match state.source_weights.write() {
         Ok(mut w) => {

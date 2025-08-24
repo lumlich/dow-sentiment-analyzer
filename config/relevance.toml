@@ -71,6 +71,12 @@ id = "fed_core"
 category = "macro"
 pattern = "(?i)\\b(fed|federal reserve|fomc)\\b"
 
+# Robust Powell macro anchor (supports "Powell's", initials, etc.)
+[[anchors]]
+id = "powell_any"
+category = "macro"
+pattern = "(?i)\\b(jerome\\s+h?\\.?\\s*powell|powell(?:['’]s)?)\\b"
+
 [[anchors]]
 id = "fed_titles"
 category = "macro"

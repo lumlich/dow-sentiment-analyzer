@@ -20,125 +20,131 @@ verb = 1
 [[anchors]]
 id = "djia_core_names"
 category = "hard"
-pattern = "\\b(djia|dow jones|the dow|dow 30|30-stock index|blue[- ]chip index)\\b"
+pattern = "(?i)\\b(djia|dow jones|the dow|dow 30|30-stock index|blue[- ]chip index)\\b"
 
 [[anchors]]
 id = "djia_symbols"
 category = "hard"
-pattern = "(\\$DJI|\\^DJI|#DJIA|#DowJones)\\b"
+pattern = "(?i)(\\$DJI|\\^DJI|#DJIA|#DowJones)\\b"
 
 [[anchors]]
 id = "djia_futures_ym"
 category = "hard"
-pattern = "\\b(ym|mym)\\b"
-near = { pattern = "\\b(futures?|e-?mini|micro\\s*e-?mini|cbot)\\b", window = 3 }
+pattern = "(?i)\\b(ym|mym)\\b"
+near = { pattern = "(?i)\\b(futures?|e-?mini|micro\\s*e-?mini|cbot)\\b", window = 3 }
 
 [[anchors]]
 id = "market_context_core"
 category = "semi"
-pattern = "\\b(wall street|equities|stocks?|stock market|markets?|market breadth)\\b"
+pattern = "(?i)\\b(wall street|equities|stocks?|stock market|markets?|market breadth)\\b"
 
 [[anchors]]
 id = "market_microstructure"
 category = "semi"
-pattern = "\\b(futures?|pre-?market|after-?hours|opening bell|closing bell|limit up|limit down|volatility|volatile)\\b"
+pattern = "(?i)\\b(futures?|pre-?market|after-?hours|opening bell|closing bell|limit up|limit down|volatility|volatile)\\b"
 
 [[anchors]]
 id = "risk_phrases"
 category = "semi"
-pattern = "\\b(risk-?on|risk-?off|bear market|bull market|sell-?off|rally)\\b"
+pattern = "(?i)\\b(risk-?on|risk-?off|bear market|bull market|sell-?off|rally)\\b"
 
 # ----- Macro / Policy with market impact -----
 [[anchors]]
 id = "fed_core"
 category = "macro"
-pattern = "\\bfed\\b"
+pattern = "(?i)\\b(fed|federal reserve|fomc)\\b"
 
 [[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
-pattern = "\\bpowell\\b"
-near = { pattern = "\\b(fed|rates?|fomc)\\b", window = 6 }
+pattern = "(?i)\\bpowell\\b"
+near = { pattern = "(?i)\\b(fed|federal reserve|rates?|rate (hike|cut|decision|path)|fomc)\\b", window = 6 }
+
+[[anchors]]
+id = "powell_fed_near_dow_context"
+category = "macro"
+pattern = "(?i)\\b(powell|fed|federal reserve|fomc)\\b"
+near = { pattern = "(?i)\\b(dow|djia|the dow|equities|stocks?|futures?)\\b", window = 12 }
 
 [[anchors]]
 id = "yellen_near_treasury"
 category = "macro"
-pattern = "\\byellen\\b"
-near = { pattern = "\\b(treasury|yields?|auction|notes?)\\b", window = 6 }
+pattern = "(?i)\\byellen\\b"
+near = { pattern = "(?i)\\b(treasury|yields?|auction|notes?)\\b", window = 6 }
 
 [[anchors]]
 id = "macro_indicators"
 category = "macro"
-pattern = "\\b(cpi|pce|ppi|nfp|jobs? report|unemployment|payrolls?|gdp|retail sales|ism|pmi)\\b"
+pattern = "(?i)\\b(cpi|pce|ppi|nfp|jobs? report|unemployment|payrolls?|gdp|retail sales|ism|pmi)\\b"
 
 [[anchors]]
 id = "rates_yields_policy"
 category = "macro"
-pattern = "\\b(treasury yields?|10-?year|ust10y|yield curve|rate (hike|cut)s?|qt|qe|tariffs?|sanctions?)\\b"
+pattern = "(?i)\\b(treasury yields?|10-?year|ust10y|yield curve|rate (hike|cut)s?|policy|qt|qe|tariffs?|sanctions?)\\b"
 
 # ----- Cross-index (soft) -----
 [[anchors]]
 id = "cross_index_spx_ndx"
 category = "soft"
-pattern = "\\b(s&p\\s*500|s\\&p\\s*500|spx|\\$spx|es|\\$es|nasdaq|ndx|\\$nq)\\b"
+pattern = "(?i)\\b(s&p\\s*500|s\\&p\\s*500|spx|\\$spx|es|\\$es|nasdaq|ndx|\\$nq)\\b"
 
 # ----- Market movement verbs (soft) -----
 [[anchors]]
 id = "price_action_verbs_up"
 category = "verb"
-pattern = "\\b(surge|soar|jump|pop|rally|spike)\\b"
+pattern = "(?i)\\b(surge|soar|jump|pop|rally|spike)\\b"
 
 [[anchors]]
 id = "price_action_verbs_down"
 category = "verb"
-pattern = "\\b(slump|plunge|tank|sell\\s*off|whipsaw)\\b"
+pattern = "(?i)\\b(slump|plunge|tank|sell\\s*off|whipsaw)\\b"
 
 # ----- Single-stock caution (informational anchor; handled conservatively in code) -----
 [[anchors]]
 id = "dow_inc_ticker"
 category = "soft"
-pattern = "\\$DOW\\b"
+pattern = "(?i)\\$DOW\\b"
 tag = "single_stock_only"   # code will require extra context to avoid confusing with DJIA
 
-# =================
+# ================
 # Blockers (hard)
-# =================
+# ================
 [[blockers]]
 id = "dow_homonyms"
-pattern = "\\b(downtown|downton|downey|dowel|dowry|window|shadow)\\b"
+pattern = "(?i)\\b(downtown|downton|downey|dowel|dowry|window|shadow)\\b"
 reason = "Non-financial 'dow' substrings"
 action = "block"
 
 [[blockers]]
 id = "dji_drones"
-pattern = "\\bdji\\b"
-near = { pattern = "\\b(drone|mavic|gimbal|osmo|fpv)\\b", window = 4 }
+pattern = "(?i)\\bdji\\b"
+near = { pattern = "(?i)\\b(drone|mavic|gimbal|osmo|fpv)\\b", window = 4 }
 reason = "DJI (drones), not the index"
 action = "block"
 
 [[blockers]]
 id = "downton_abbey"
-pattern = "\\bdownton\\s+abbey\\b"
+pattern = "(?i)\\bdownton\\s+abbey\\b"
 reason = "TV show"
 action = "block"
 
 [[blockers]]
 id = "robert_downey"
-pattern = "\\brobert\\s+downey\\b"
+pattern = "(?i)\\brobert\\s+downey\\b"
 reason = "Actor"
 action = "block"
 
 [[blockers]]
 id = "down_syndrome_phrase"
-pattern = "\\bdown\\s+syndrome\\b"
+pattern = "(?i)\\bdown\\s+syndrome\\b"
 reason = "Medical context"
 action = "block"
 
 # Block $DOW unless there is broader market/index context nearby (code will implement the logic).
 [[blockers]]
 id = "dow_inc_without_market_context"
-pattern = "\\$DOW\\b"
-unless_near = { pattern = "\\b(djia|dow jones|the dow|index|stock market|markets?|wall street|futures?)\\b", window = 6 }
+pattern = "(?i)\\$DOW\\b"
+unless_near = { pattern = "(?i)\\b(djia|dow jones|the dow|index|stock market|markets?|wall street|futures?)\\b", window = 6 }
 reason = "Single-stock ticker likely unrelated to DJIA"
 action = "block"
 
@@ -153,6 +159,9 @@ need = ["hard", "verb"]          # e.g., "Dow is down"
 
 [[combos.pass_any]]
 need = ["hard", "semi"]          # DJIA explicit + market context
+
+[[combos.pass_any]]
+need = ["macro", "hard"]         # Fed/Powell context + explicit DJIA/Dow
 
 [[combos.pass_any]]
 need = ["macro", "macro", "verb_or_semi"]  # strong macro + movement or market context

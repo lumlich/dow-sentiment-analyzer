@@ -126,6 +126,18 @@ Response (example):
 
 ---
 
+## Development — Common tasks
+
+We use cargo aliases (see `.cargo/config.toml`) for convenience:
+
+- `cargo t` → run all fast unit tests across workspace  
+- `cargo tu` → run unit tests only in this crate (`dow-sentiment-analyzer`)  
+- `cargo ts` → run synthetic suite (marked `#[ignore]`)  
+- `cargo cf` → check formatting (`cargo fmt --check`)  
+- `cargo cl` → run Clippy with `-D warnings`  
+
+---
+
 ## Project Roadmap
 The development is structured into 6 phases (Core logic, Frontend, Contextual rules, AI integration, Notifications, Stability & Ops).  
 See [Milestones](https://github.com/lumlich/dow-sentiment-analyzer/milestones) for detailed progress.
@@ -144,4 +156,89 @@ Open an Issue with `feat:` or `bug:` prefix; PRs welcome.
 See [Issues](../../issues) and [Milestones](../../milestones).
 
 ---
+
+### Relevance Gate
+
+**What it does.** Before sentiment, every input is scored for *market relevance* in `[0.0, 1.0]`.  
+If `score < RELEVANCE_THRESHOLD`, the request is **neutralized** (treated as irrelevant noise) and the decision pipeline returns a neutral outcome with an explanatory reason.
+
+**How it scores (precision-first):**
+- **Anchors** — strong patterns like `djia|dow jones|the dow|dow` or `powell` near `fed|fomc|rates?`.
+- **Blockers** — exclude common false positives (e.g., `dji drones`, `dow inc`).
+- **Proximity rules** — `near { pattern, window }` to require context proximity.
+- **Combos** — pass conditions, e.g. need both `macro` **and** `hard` categories.
+- **Weights** — category weights (e.g., `hard=3, macro=2, soft=1`) combine into the final score.
+
+**Config schema (TOML, excerpt):**
+```toml
+[weights]
+hard = 3
+macro = 2
+soft = 1
+
+[blockers]
+patterns = [
+  "\\b(dji drones?|mavic)\\b",
+  "\\bdow inc\\b",
+]
+
+[[anchors]]
+id = "djia_core_names"
+category = "hard"
+pattern = "\\b(djia|dow jones|the dow|dow)\\b"
+
+[[anchors]]
+id = "powell_near_fed_rates"
+category = "macro"
+pattern = "\\bpowell\\b"
+near = { pattern = "\\b(fed|fomc|rates?)\\b", window = 6 }
+
+[[combos.pass_any]]
+need = ["macro","hard"]
+```
+
+**Hot-reload (dev only).** When running locally with `SHUTTLE_ENV=local`, changes to `RELEVANCE_CONFIG_PATH` are reloaded without restart.
+
+**Environment**
+| Variable                 | Default                 | Meaning                                         |
+|-------------------------|-------------------------|-------------------------------------------------|
+| `RELEVANCE_CONFIG_PATH` | `config/relevance.toml` | Where to load the anchors/blockers config from. |
+| `RELEVANCE_THRESHOLD`   | `0.5`                   | Score cutoff in `[0.0,1.0]`; below → neutralize.|
+
+Examples:
+```bash
+RELEVANCE_THRESHOLD=0.65 cargo run
+RELEVANCE_CONFIG_PATH=.local/relevance.dev.toml cargo test -p dow-sentiment-analyzer
+```
+
+**API example — POST /decide (relevance gate in action)**
+```bash
+curl -s -X POST http://localhost:8000/decide \
+  -H "Content-Type: application/json" \
+  -d '{ "text": "Powell signals patience; FOMC holds rates." }'
+```
+Sample response:
+```json
+{
+  "decision": "HOLD",
+  "relevance": {
+    "score": 0.74,
+    "matched": ["powell_near_fed_rates","djia_core_names"],
+    "reasons": ["combo macro+hard matched"]
+  }
+}
+```
+If the input is off-topic (e.g., DJI drones), you’ll see:
+```json
+{
+  "decision": "NEUTRAL",
+  "relevance": {
+    "score": 0.00,
+    "reasons": ["neutralized: below relevance threshold"]
+  }
+}
+```
+
+---
+
 **Contributions, ideas, and comments are welcome.**

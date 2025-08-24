@@ -11,6 +11,10 @@ readme = "README.md"
 [dependencies]
 # Async runtime
 tokio = { version = "1.47", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+sha2 = "0.10"
+dotenvy = "0.15"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -25,6 +29,9 @@ tower-http = { version = "0.6", features = ["cors"] }
 # Shuttle (deployment runtime + Axum re-export)
 shuttle-runtime = "0.56.0"
 shuttle-axum = "0.56.0"
+regex = "1.11.1"
+anyhow = "1.0.99"
+toml = "0.9.5"
 
 # Optional: Uncomment if external API calls are needed
 # reqwest = { version = "0.12", features = ["json"] }
@@ -32,3 +39,6 @@ shuttle-axum = "0.56.0"
 [features]
 default = []
 debug = []
+
+[dev-dependencies]
+rand = "0.8"

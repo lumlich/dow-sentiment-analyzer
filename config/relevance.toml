@@ -86,7 +86,7 @@ near = { pattern = "(?i)\\b(fed|federal reserve|rates?|rate (hike|cut|decision|p
 id = "powell_fed_near_dow_context"
 category = "hard"
 pattern = "(?i)\\b(powell|fed|federal reserve|fomc)\\b"
-near = { pattern = "(?i)\\b(dow|djia|the dow|industrial average|equities|stocks?|futures?)\\b", window = 20 }
+near = { pattern = "(?i)\\b(dow|djia|the dow|industrial average|index|equities|stocks?|futures?)\\b", window = 40 }
 
 [[anchors]]
 id = "yellen_near_treasury"

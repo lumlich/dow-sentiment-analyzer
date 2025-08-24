@@ -140,11 +140,7 @@ impl Decision {
     ///
     /// Logging:
     /// - Dev-only tracing: anonymized text hash, short matched list, and first reason.
-    pub fn apply_relevance_gate(
-        &mut self,
-        input_text: &str,
-        handle: &RelevanceHandle,
-    ) {
+    pub fn apply_relevance_gate(&mut self, input_text: &str, handle: &RelevanceHandle) {
         let rel = handle.score(input_text);
         let passed = rel.score > 0.0;
 
@@ -163,7 +159,7 @@ impl Decision {
         }
 
         // Dev-only anonymized logs (activated via main.rs init)
-        let first_reason = rel.reasons.get(0).cloned().unwrap_or_default();
+        let first_reason = rel.reasons.first().cloned().unwrap_or_default();
         let matched_short = truncate_vec(&rel.matched, 8);
         let hash = anon_hash_short(input_text);
 

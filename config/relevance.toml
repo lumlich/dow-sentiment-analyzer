@@ -33,6 +33,12 @@ category = "hard"
 pattern = "(?i)\\bdow\\b"
 near = { pattern = "(?i)\\b(jones|djia|index|equities|stocks?|futures?)\\b", window = 6 }
 
+# NEW: plain "Dow" as hard anchor
+[[anchors]]
+id = "dow_bare"
+category = "hard"
+pattern = "(?i)\\bdow\\b"
+
 [[anchors]]
 id = "djia_futures_ym"
 category = "hard"
@@ -146,6 +152,12 @@ pattern = "(?i)\\bdown\\s+syndrome\\b"
 reason = "Medical context"
 action = "block"
 
+[[blockers]]
+id = "dow_inc_company"
+pattern = "(?i)\\bdow inc\\.?\\b|\\bdow chemical\\b"
+reason = "Company context (Dow Inc.), not DJIA"
+action = "block"
+
 # Block $DOW unless there is broader market/index context nearby (code will implement the logic).
 [[blockers]]
 id = "dow_inc_without_market_context"
@@ -158,8 +170,6 @@ action = "block"
 # Required combo suggestions
 # (code enforces these)
 # ==========================
-# Express the conservative combos we want the scorer to honor.
-# The engine will treat these as pass templates (any one satisfied -> pass).
 [[combos.pass_any]]
 need = ["hard", "verb"]          # e.g., "Dow is down"
 
@@ -175,6 +185,5 @@ need = ["macro", "macro", "verb_or_semi"]  # strong macro + movement or market c
 [[combos.pass_any]]
 need = ["semi", "semi", "soft", "verb"]    # broad market chatter with clear movement
 
-# Helper alias for combos (used by code; not evaluated here)
 [aliases]
 verb_or_semi = ["verb","semi"]

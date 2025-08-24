@@ -77,6 +77,12 @@ category = "macro"
 pattern = "(?i)\\b(fed chair|chair powell|fed chief)\\b"
 
 [[anchors]]
+id = "powell_to_dow_span"
+category = "hard"
+# Match Powell/Fed ... up to ~200 chars ... Dow/DJIA (any order), case-insensitive.
+pattern = "(?i)(\\b(powell|federal\\s+reserve|fomc)\\b[^\\n]{0,200}\\b(dow|djia|industrial\\s+average|the\\s+dow)\\b|\\b(dow|djia|industrial\\s+average|the\\s+dow)\\b[^\\n]{0,200}\\b(powell|federal\\s+reserve|fomc)\\b)"
+
+[[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
 pattern = "(?i)\\bpowell\\b"

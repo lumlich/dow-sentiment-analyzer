@@ -72,6 +72,11 @@ category = "macro"
 pattern = "(?i)\\b(fed|federal reserve|fomc)\\b"
 
 [[anchors]]
+id = "powell_any"
+category = "macro"
+pattern = "(?i)\\b(jerome\\s+powell|powell)\\b"
+
+[[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
 pattern = "(?i)\\bpowell\\b"

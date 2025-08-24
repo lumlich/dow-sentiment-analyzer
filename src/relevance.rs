@@ -137,7 +137,6 @@ pub fn tokenize(input: &str) -> Vec<Token> {
 
 /// Extract cashtags like `$DJI`, `$DOW`, allowing 1–5 letters.
 /// Returns distinct, uppercase symbols (without `$`).
-
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn parse_cashtags(input: &str) -> Vec<String> {
     let re = Regex::new(r"(?i)(?P<tag>\$[a-z]{1,5})\b").expect("cashtag regex");
@@ -154,7 +153,6 @@ pub fn parse_cashtags(input: &str) -> Vec<String> {
 
 /// Extract hashtags like `#DJIA`, `#DowJones`.
 /// Returns distinct, lowercased tags (without `#`).
-
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn parse_hashtags(input: &str) -> Vec<String> {
     let re = Regex::new(r"(?i)(?P<tag>#[a-z0-9_]+)\b").expect("hashtag regex");
@@ -357,7 +355,8 @@ impl RelevanceEngine {
     }
 
     /// Tokenize once and return tokens + quick index of byte->token mapping for proximity checks.
-    pub fn tokenize_with_index<'a>(&self, text: &'a str) -> (Vec<Token>, Vec<usize>) {
+    #[allow(clippy::needless_range_loop)]
+    pub fn tokenize_with_index(&self, text: &str) -> (Vec<Token>, Vec<usize>) {
         let tokens = tokenize(text);
         // Build byte-position → token-index lookup (sparse; length = text.len()+1)
         let mut byte_to_tok = vec![usize::MAX; text.len() + 1];
@@ -708,7 +707,7 @@ impl RelevanceEngine {
 Thread-safe handle + hot reload
 ---------------------------- */
 
-/// A threadsafe handle that can hot‑reload the underlying engine in dev/local.
+/// A threadsafe handle that can hot-reload the underlying engine in dev/local.
 /// - Enable by setting RELEVANCE_HOT_RELOAD=1
 /// - Dev-gated: active only if cfg!(debug_assertions) OR SHUTTLE_ENV is "local"/"development".
 #[derive(Clone)]
@@ -757,17 +756,16 @@ fn hot_reload_enabled() -> bool {
     if cfg!(debug_assertions) {
         return true;
     }
-    match std::env::var("SHUTTLE_ENV")
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "local" | "development" | "dev" => true,
-        _ => false,
-    }
+    matches!(
+        std::env::var("SHUTTLE_ENV")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "local" | "development" | "dev"
+    )
 }
 
-/// Start a simple polling watcher on `path` to hot‑reload into `handle.inner`.
+/// Start a simple polling watcher on `path` to hot-reload into `handle.inner`.
 /// Polls mtime every 2s. Uses only std, no external deps.
 pub fn start_hot_reload_thread(handle: RelevanceHandle, path: PathBuf) {
     if !hot_reload_enabled() {
@@ -837,35 +835,35 @@ verb = 1
 [[anchors]]
 id = "djia_core_names"
 category = "hard"
-pattern = "(?i)\\b(djia|dow jones|the dow|dow)\\b"
+pattern = "(?i)\b(djia|dow jones|the dow|dow)\b"
 
 # Macro context: Powell near Fed/rates/FOMC
 [[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
-pattern = "(?i)\\bpowell\\b"
-near = { pattern = "(?i)\\b(fed|rates?|fomc)\\b", window = 6 }
+pattern = "(?i)\bpowell\b"
+near = { pattern = "(?i)\b(fed|rates?|fomc)\b", window = 6 }
 
 # Optional "single stock only" tag for Dow Inc. (edge case)
 [[anchors]]
 id = "dow_inc_single"
 category = "soft"
-pattern = "(?i)\\bdow inc\\.?\\b"
+pattern = "(?i)\bdow inc\.?\b"
 tag = "single_stock_only"
 
 # Block DJI (drones) when near drone terms
 [[blockers]]
 id = "dji_drones"
-pattern = "(?i)\\bdji\\b"
-near = { pattern = "(?i)\\b(drone|mavic)\\b", window = 4 }
+pattern = "(?i)\bdji\b"
+near = { pattern = "(?i)\b(drone|mavic)\b", window = 4 }
 reason = "DJI (drones)"
 action = "block"
 
 # Block 'dow' when it is the single-stock company 'Dow Inc.'
 [[blockers]]
 id = "dow_inc_near_dow_word"
-pattern = "(?i)\\bdow\\b"
-near = { pattern = "(?i)\\binc\\.?\\b", window = 1 }
+pattern = "(?i)\bdow\b"
+near = { pattern = "(?i)\binc\.?\b", window = 1 }
 reason = "Dow Inc (single stock)"
 action = "block"
 
@@ -905,7 +903,7 @@ verb_or_semi = ["verb", "semi"]
 
     #[test]
     fn pass_powell_fed_dow_context() {
-        // Self‑contained test config: only the categories we want to exercise
+        // Self-contained test config: only the categories we want to exercise
         const TEST_TOML: &str = r#"
 [relevance]
 threshold = 0.30

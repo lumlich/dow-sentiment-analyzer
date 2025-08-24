@@ -1,0 +1,15 @@
+# .cargo/config.toml
+[alias]
+# Run fast unit tests (default set) across the workspace
+t = "test --workspace --all-features"
+
+# Run only in this crate
+tu = "test -p dow-sentiment-analyzer --all-features"
+
+# Run the synthetic (ignored) suite in this crate
+# Note: tests must be tagged with #[ignore]
+ts = "test -p dow-sentiment-analyzer --all-features -- --ignored --nocapture"
+
+# Clippy & fmt helpers (useful in CI)
+cf = "fmt --all -- --check"
+cl = "clippy --workspace --all-features -- -D warnings"

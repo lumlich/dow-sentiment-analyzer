@@ -35,7 +35,7 @@ pub struct HistoryQuery {
     pub limit: Option<usize>,
 }
 
-pub fn router() -> Router {
+pub fn router() -> Router<()> {
     Router::new()
         .route("/history", get(history))
         .route("/stats", get(stats))

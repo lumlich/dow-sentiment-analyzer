@@ -28,6 +28,12 @@ category = "hard"
 pattern = "(?i)(\\$DJI|\\^DJI|#DJIA|#DowJones)\\b"
 
 [[anchors]]
+id = "dow_bare_near_market"
+category = "hard"
+pattern = "(?i)\\bdow\\b"
+near = { pattern = "(?i)\\b(jones|djia|index|equities|stocks?|futures?)\\b", window = 6 }
+
+[[anchors]]
 id = "djia_futures_ym"
 category = "hard"
 pattern = "(?i)\\b(ym|mym)\\b"

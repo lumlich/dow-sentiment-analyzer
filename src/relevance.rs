@@ -835,35 +835,35 @@ verb = 1
 [[anchors]]
 id = "djia_core_names"
 category = "hard"
-pattern = "(?i)\b(djia|dow jones|the dow|dow)\b"
+pattern = "(?i)\\b(djia|dow jones|the dow|dow)\\b"
 
 # Macro context: Powell near Fed/rates/FOMC
 [[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
-pattern = "(?i)\bpowell\b"
-near = { pattern = "(?i)\b(fed|rates?|fomc)\b", window = 6 }
+pattern = "(?i)\\bpowell\\b"
+near = { pattern = "(?i)\\b(fed|rates?|fomc)\\b", window = 6 }
 
 # Optional "single stock only" tag for Dow Inc. (edge case)
 [[anchors]]
 id = "dow_inc_single"
 category = "soft"
-pattern = "(?i)\bdow inc\.?\b"
+pattern = "(?i)\\bdow inc\\.?\\b"
 tag = "single_stock_only"
 
 # Block DJI (drones) when near drone terms
 [[blockers]]
 id = "dji_drones"
-pattern = "(?i)\bdji\b"
-near = { pattern = "(?i)\b(drone|mavic)\b", window = 4 }
+pattern = "(?i)\\bdji\\b"
+near = { pattern = "(?i)\\b(drone|mavic)\\b", window = 4 }
 reason = "DJI (drones)"
 action = "block"
 
 # Block 'dow' when it is the single-stock company 'Dow Inc.'
 [[blockers]]
 id = "dow_inc_near_dow_word"
-pattern = "(?i)\bdow\b"
-near = { pattern = "(?i)\binc\.?\b", window = 1 }
+pattern = "(?i)\\bdow\\b"
+near = { pattern = "(?i)\\binc\\.?\\b", window = 1 }
 reason = "Dow Inc (single stock)"
 action = "block"
 

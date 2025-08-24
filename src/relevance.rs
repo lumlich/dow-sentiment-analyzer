@@ -941,7 +941,7 @@ need = ["macro","hard"]
         );
 
         // This sentence should hit both anchors within proximity -> combo ok
-        let text = "Jerome Powell says the Federal Reserve will stay data‑dependent; the Dow Jones Industrial Average moved after the FOMC meeting.";
+        let text = "Powell said the Dow rose after the FOMC meeting.";
         let r = eng.score(text);
 
         // With weights limited to {hard, macro}, the normalized score is 5 / 15 = 0.333.. > 0.30

@@ -918,13 +918,13 @@ macro = 2
 [[anchors]]
 id = "djia_core_names"
 category = "hard"
-pattern = "\\b(djia|dow jones|the dow|dow)\\b"
+pattern = "(?i)\\b(djia|dow jones|the dow|dow)\\b"
 
 [[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
-pattern = "\\bpowell\\b"
-near = { pattern = "\\b(fed|fomc|rates?)\\b", window = 6 }
+pattern = "(?i)\\bpowell\\b"
+near = { pattern = "(?i)\\b(fed|fomc|rates?)\\b", window = 10 }
 
 [[combos.pass_any]]
 need = ["macro","hard"]

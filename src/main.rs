@@ -31,7 +31,7 @@ use crate::relevance::{
 fn enable_dev_tracing() {
     let dev_flag = std::env::var("RELEVANCE_DEV_LOG")
         .ok()
-        .map_or(false, |v| v == "1");
+        .is_some_and(|v| v == "1");
 
     let is_dev_env = cfg!(debug_assertions)
         || matches!(

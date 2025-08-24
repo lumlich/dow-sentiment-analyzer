@@ -76,7 +76,7 @@ near = { pattern = "(?i)\\b(fed|federal reserve|rates?|rate (hike|cut|decision|p
 id = "powell_fed_near_dow_context"
 category = "macro"
 pattern = "(?i)\\b(powell|fed|federal reserve|fomc)\\b"
-near = { pattern = "(?i)\\b(dow|djia|the dow|equities|stocks?|futures?)\\b", window = 12 }
+near = { pattern = "(?i)\\b(dow|djia|the dow|industrial average|equities|stocks?|futures?)\\b", window = 20 }
 
 [[anchors]]
 id = "yellen_near_treasury"
@@ -116,7 +116,7 @@ pattern = "(?i)\\b(slump|plunge|tank|sell\\s*off|whipsaw)\\b"
 id = "dow_inc_ticker"
 category = "soft"
 pattern = "(?i)\\$DOW\\b"
-tag = "single_stock_only"   # code will require extra context to avoid confusing with DJIA
+tag = "single_stock_only"
 
 # ================
 # Blockers (hard)
@@ -158,7 +158,6 @@ pattern = "(?i)\\bdow inc\\.?\\b|\\bdow chemical\\b"
 reason = "Company context (Dow Inc.), not DJIA"
 action = "block"
 
-# Block $DOW unless there is broader market/index context nearby (code will implement the logic).
 [[blockers]]
 id = "dow_inc_without_market_context"
 pattern = "(?i)\\$DOW\\b"
@@ -168,22 +167,21 @@ action = "block"
 
 # ==========================
 # Required combo suggestions
-# (code enforces these)
 # ==========================
 [[combos.pass_any]]
-need = ["hard", "verb"]          # e.g., "Dow is down"
+need = ["hard", "verb"]
 
 [[combos.pass_any]]
-need = ["hard", "semi"]          # DJIA explicit + market context
+need = ["hard", "semi"]
 
 [[combos.pass_any]]
-need = ["macro", "hard"]         # Fed/Powell context + explicit DJIA/Dow
+need = ["macro", "hard"]
 
 [[combos.pass_any]]
-need = ["macro", "macro", "verb_or_semi"]  # strong macro + movement or market context
+need = ["macro", "macro", "verb_or_semi"]
 
 [[combos.pass_any]]
-need = ["semi", "semi", "soft", "verb"]    # broad market chatter with clear movement
+need = ["semi", "semi", "soft", "verb"]
 
 [aliases]
 verb_or_semi = ["verb","semi"]

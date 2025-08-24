@@ -392,7 +392,7 @@ impl RelevanceEngine {
     fn within_window(main_idxs: &[usize], near_idxs: &[usize], window: usize) -> bool {
         for &a in main_idxs {
             for &b in near_idxs {
-                let dist = if a > b { a - b } else { b - a };
+                let dist = a.abs_diff(b);
                 if dist <= window {
                     return true;
                 }

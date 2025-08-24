@@ -19,6 +19,12 @@ pub const DEFAULT_RELEVANCE_THRESHOLD: f32 = 0.5;
 pub const ENV_RELEVANCE_CONFIG_PATH: &str = "RELEVANCE_CONFIG_PATH";
 pub const ENV_RELEVANCE_THRESHOLD: &str = "RELEVANCE_THRESHOLD";
 
+// Simple shared app state used by Axum.
+#[derive(Clone)]
+pub struct AppState {
+    pub relevance: RelevanceHandle,
+}
+
 // Dev logging gate: RELEVANCE_DEV_LOG=1 AND dev env (debug or SHUTTLE_ENV in {local,development,dev})
 pub(crate) fn dev_logging_enabled() -> bool {
     let on = std::env::var("RELEVANCE_DEV_LOG").ok().as_deref() == Some("1");

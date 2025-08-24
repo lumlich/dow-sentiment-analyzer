@@ -23,6 +23,11 @@ category = "hard"
 pattern = "(?i)\\b(djia|dow jones|the dow|dow 30|30-stock index|blue[- ]chip index)\\b"
 
 [[anchors]]
+id = "djia_industrial_average"
+category = "hard"
+pattern = "(?i)\\b(dow jones industrial average|industrial average|dow industrials|the industrials)\\b"
+
+[[anchors]]
 id = "djia_symbols"
 category = "hard"
 pattern = "(?i)(\\$DJI|\\^DJI|#DJIA|#DowJones)\\b"

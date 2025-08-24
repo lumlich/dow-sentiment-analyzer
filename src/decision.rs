@@ -12,6 +12,10 @@
 
 use serde::{Deserialize, Serialize};
 
+// ----- Relevance gate hook (light coupling) -----
+use crate::relevance::RelevanceHandle;
+use sha2::{Digest, Sha256};
+
 /// Final verdict of the decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -126,6 +130,71 @@ impl Decision {
         self.top_contributors.push(c);
         self
     }
+
+    /// Apply the relevance gate to this decision.
+    ///
+    /// Contract:
+    /// - If the relevance score is neutralized (<= 0.0), set confidence to 0.0 and
+    ///   append a threshold-kind reason. Keep the original verdict for transparency.
+    /// - If the relevance score is positive, append a passing reason with the score.
+    ///
+    /// Logging:
+    /// - Dev-only tracing: anonymized text hash, short matched list, and first reason.
+    pub fn apply_relevance_gate(
+        &mut self,
+        input_text: &str,
+        handle: &RelevanceHandle,
+    ) {
+        let rel = handle.score(input_text);
+        let passed = rel.score > 0.0;
+
+        // Human-facing reason
+        if passed {
+            self.reasons.push(
+                Reason::new(format!("relevance gate passed (rel {:.2})", rel.score))
+                    .kind(ReasonKind::Threshold),
+            );
+        } else {
+            self.confidence = 0.0; // neutralize confidence
+            self.reasons.push(
+                Reason::new("neutralized by relevance gate (rel <= 0.00)")
+                    .kind(ReasonKind::Threshold),
+            );
+        }
+
+        // Dev-only anonymized logs (activated via main.rs init)
+        let first_reason = rel.reasons.get(0).cloned().unwrap_or_default();
+        let matched_short = truncate_vec(&rel.matched, 8);
+        let hash = anon_hash_short(input_text);
+
+        if passed {
+            tracing::debug!(
+                target: "relevance",
+                evt = "passed",
+                rel_score = %format!("{:.2}", rel.score),
+                matched = ?matched_short,
+                reason0 = %first_reason,
+                hash = %hash,
+                "relevance gate evaluation"
+            );
+        } else {
+            tracing::info!(
+                target: "relevance",
+                evt = "neutralized",
+                rel_score = %format!("{:.2}", rel.score),
+                matched = ?matched_short,
+                reason0 = %first_reason,
+                hash = %hash,
+                "relevance gate evaluation"
+            );
+        }
+
+        // Optionally surface raw reasons from relevance (useful for introspection)
+        // Comment this out if you do not want to leak internal rationale to clients.
+        for r in rel.reasons {
+            self.reasons.push(Reason::new(format!("rel: {}", r)));
+        }
+    }
 }
 
 impl Reason {
@@ -176,6 +245,24 @@ impl Contributor {
 
 fn clamp01(x: f32) -> f32 {
     x.clamp(0.0, 1.0)
+}
+
+/// Produce a short anonymized hash for dev logs (first 12 hex chars).
+fn anon_hash_short(text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(12);
+    for b in digest.iter().take(6) {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
+
+/// Truncate any list-like view for compact logging.
+fn truncate_vec<T: ToString>(v: &[T], max: usize) -> Vec<String> {
+    v.iter().take(max).map(|x| x.to_string()).collect()
 }
 
 #[cfg(test)]

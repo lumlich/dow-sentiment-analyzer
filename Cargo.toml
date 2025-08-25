@@ -1,6 +1,6 @@
 [package]
 name = "dow-sentiment-analyzer"
-version = "0.2.1"
+version = "0.1.0"
 edition = "2021"
 description = "A sentiment analysis and decision engine for Dow Jones futures, built with Rust, Axum, and Tokio."
 license = "MIT"
@@ -41,10 +41,11 @@ default = []
 debug = []
 
 [dev-dependencies]
-rand = "0.8"
+rand = "0.9"
 tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [lib]
 name = "dow_sentiment_analyzer"
 path = "src/lib.rs"
+

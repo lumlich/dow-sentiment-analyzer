@@ -25,6 +25,29 @@ pub struct AppState {
     pub relevance: RelevanceHandle,
 }
 
+impl AppState {
+    /// Build AppState from environment for tests and local runs.
+    /// - Reads RELEVANCE_CONFIG_PATH (falls back to DEFAULT_RELEVANCE_CONFIG_PATH).
+    /// - Loads and compiles the relevance engine.
+    /// - Starts hot-reload thread if enabled (RELEVANCE_HOT_RELOAD=1 and dev/local).
+    pub fn from_env() -> Self {
+        // Load engine using env-aware loader (also respects RELEVANCE_THRESHOLD)
+        let engine = RelevanceEngine::from_toml()
+            .expect("failed to load relevance config via RelevanceEngine::from_toml()");
+        let handle = RelevanceHandle::new(engine);
+
+        // Determine path for hot reload watcher
+        let path = std::env::var(ENV_RELEVANCE_CONFIG_PATH)
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(DEFAULT_RELEVANCE_CONFIG_PATH));
+
+        // Fire-and-forget polling watcher (internally gated by hot_reload_enabled()).
+        start_hot_reload_thread(handle.clone(), path);
+
+        Self { relevance: handle }
+    }
+}
+
 // Dev logging gate: RELEVANCE_DEV_LOG=1 AND dev env (debug or SHUTTLE_ENV in {local,development,dev})
 pub(crate) fn dev_logging_enabled() -> bool {
     let on = std::env::var("RELEVANCE_DEV_LOG").ok().as_deref() == Some("1");

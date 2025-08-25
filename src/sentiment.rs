@@ -19,7 +19,7 @@ static LEXICON: Lazy<HashMap<String, i32>> = Lazy::new(|| {
 });
 
 /// Stateless sentiment analyzer (lexicon-based).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SentimentAnalyzer;
 
 impl SentimentAnalyzer {
@@ -41,9 +41,11 @@ impl SentimentAnalyzer {
     ///
     /// # Example
     /// ```
-    /// use mvp::sentiment::SentimentAnalyzer;
+    /// use dow_sentiment_analyzer::sentiment::SentimentAnalyzer;
+    ///
     /// let sa = SentimentAnalyzer::new();
     /// let (s, n) = sa.score_text("good job");
+    ///
     /// assert!(s > 0);
     /// assert_eq!(n, 2);
     /// ```

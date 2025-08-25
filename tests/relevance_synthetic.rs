@@ -5,7 +5,9 @@
 //!   SHOW_ALL=1       -> print full reasons vector (verbose)
 
 use dow_sentiment_analyzer::relevance::RelevanceEngine;
-use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
+// rand 0.9: choose() lives in this prelude trait
+use rand::prelude::IndexedRandom;
 use std::fmt::Write as _;
 
 #[derive(Clone)]
@@ -265,7 +267,7 @@ fn build_cases() -> Vec<Case> {
         let d = dow_ctx.choose(&mut rng).unwrap();
         let m = macro_news.choose(&mut rng).unwrap();
         let noise = random_topics.choose(&mut rng).unwrap();
-        let flip: bool = rng.gen_bool(0.75); // 75% by design should be relevant
+        let flip: bool = rng.random_bool(0.75); // 75% by design should be relevant
         let text = if flip {
             format!("{} after {} ; {}", cap(d), m, noise)
         } else {

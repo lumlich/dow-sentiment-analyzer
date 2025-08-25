@@ -42,3 +42,9 @@ debug = []
 
 [dev-dependencies]
 rand = "0.8"
+tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[lib]
+name = "dow_sentiment_analyzer"
+path = "src/lib.rs"

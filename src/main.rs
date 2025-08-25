@@ -3,23 +3,12 @@
 //!
 //! See `README.md` for quickstart and `docs/` for architecture notes.
 
-mod api;
-pub mod debug;
-mod decision;
-mod disruption;
-mod engine;
-mod history;
-mod relevance;
-mod rolling;
-mod sentiment;
-mod source_weights;
-
 use shuttle_axum::ShuttleAxum;
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-// bring handle + reload + AppState in scope
-use crate::relevance::{
+use dow_sentiment_analyzer::api;
+use dow_sentiment_analyzer::relevance::{
     start_hot_reload_thread, AppState, RelevanceEngine, RelevanceHandle,
     DEFAULT_RELEVANCE_CONFIG_PATH, ENV_RELEVANCE_CONFIG_PATH,
 };
@@ -58,8 +47,6 @@ fn enable_dev_tracing() {
 #[shuttle_runtime::main]
 async fn axum() -> ShuttleAxum {
     // Load .env in local/dev; no-op in prod environments.
-    // This enables RELEVANCE_CONFIG_PATH / RELEVANCE_THRESHOLD from .env
-    // so relevance.rs can pick them up.
     let _ = dotenvy::dotenv();
 
     // Initialize dev tracing early (no-op in production).

@@ -94,6 +94,36 @@ category = "macro"
 pattern = "(?i)\\bpowell\\b"
 near = { pattern = "(?i)\\b(fed|federal reserve|rates?|rate (hike|cut|decision|path)|fomc)\\b", window = 6 }
 
+# --- Macro: CPI (headline + core) ---
+[[anchors]]
+id = "macro_cpi"
+category = "macro"
+# Case-insensitive, pokrývá 'CPI', 'core CPI', i slovní vyjádření
+pattern = "(?i)\\b(?:core\\s+)?cpi\\b|\\bconsumer\\s+prices?\\b.*\\b(index|inflation|print|report)\\b"
+
+# --- Macro: PCE (headline + core, deflator) ---
+[[anchors]]
+id = "macro_pce"
+category = "macro"
+# 'PCE', 'core PCE', 'personal consumption expenditures' + kontext ceny/deflatoru
+pattern = "(?i)\\b(?:core\\s+)?pce\\b|\\bpersonal\\s+consumption\\s+expenditures?\\b"
+near = { pattern = "(?i)\\b(price|deflator|inflation|index)\\b", window = 6 }
+
+# --- Macro: NFP (Nonfarm Payrolls / jobs report) ---
+[[anchors]]
+id = "macro_nfp"
+category = "macro"
+# NFP, "nonfarm payroll(s)", "jobs report"
+pattern = "(?i)\\b(?:non[-\\s]?farm)\\s+payrolls?\\b|\\bNFP\\b|\\bjobs\\s+report\\b"
+
+# --- Macro: ISM (Manufacturing/Services PMI) ---
+[[anchors]]
+id = "macro_ism"
+category = "macro"
+# Striktnější: hlavní match 'ISM', kontext do blízkosti PMI/manufacturing/services
+pattern = "(?i)\\bISM\\b"
+near = { pattern = "(?i)\\b(PMI|manufacturing|services)\\b", window = 6 }
+
 [[anchors]]
 id = "powell_fed_near_dow_context"
 category = "hard"

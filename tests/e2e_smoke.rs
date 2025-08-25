@@ -1,7 +1,9 @@
 // tests/e2e_smoke.rs
 
 use dow_sentiment_analyzer::api;
-use dow_sentiment_analyzer::relevance::AppState as RelevanceAppState;
+use dow_sentiment_analyzer::relevance::{
+    AppState as RelevanceAppState, RelevanceEngine, RelevanceHandle,
+};
 use shuttle_axum::axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -15,7 +17,9 @@ async fn smoke_decide_cpi() {
     std::env::set_var("RELEVANCE_CONFIG_PATH", "config/relevance.toml");
 
     // Build a plain Axum Router without Shuttle runtime
-    let app: Router = api::create_router(RelevanceAppState::from_env());
+    let engine = RelevanceEngine::from_toml().expect("load relevance config for tests");
+    let handle = RelevanceHandle::new(engine);
+    let app: Router = api::create_router(RelevanceAppState { relevance: handle });
 
     // Minimal POST /decide request (one item)
     let req = Request::builder()
@@ -40,7 +44,9 @@ async fn smoke_decide_cpi() {
 async fn smoke_decide_mix_with_neutralization() {
     std::env::set_var("RELEVANCE_CONFIG_PATH", "config/relevance.toml");
 
-    let app: Router = api::create_router(RelevanceAppState::from_env());
+    let engine = RelevanceEngine::from_toml().expect("load relevance config for tests");
+    let handle = RelevanceHandle::new(engine);
+    let app: Router = api::create_router(RelevanceAppState { relevance: handle });
 
     // Two items:
     // 1) CPI + Dow (should pass relevance)

@@ -1,7 +1,7 @@
 //! MVP Sentiment Service — Binary Entrypoint
 //! Boots the Axum HTTP server, wiring routes, shared state, and middleware.
 
-use shuttle_axum::axum::{Router, routing::get_service};
+use shuttle_axum::axum::{routing::get_service, Router};
 use shuttle_axum::ShuttleAxum;
 use std::path::PathBuf;
 use tower_http::services::{ServeDir, ServeFile};
@@ -43,7 +43,7 @@ fn enable_dev_tracing() {
 fn ui_router() -> Router<()> {
     // GET-only static serving for SPA
     let assets = ServeDir::new("ui/dist/assets");
-    let index  = ServeFile::new("ui/dist/index.html");
+    let index = ServeFile::new("ui/dist/index.html");
 
     Router::new()
         .nest_service("/assets", assets)

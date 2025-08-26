@@ -1,6 +1,6 @@
 //! HTTP API Layer
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
@@ -45,8 +45,18 @@ fn debug_enabled() -> bool {
         .unwrap_or(false)
 }
 
+// Return current UNIX time as string (for UI "time" field)
+fn now_string() -> String {
+    current_unix().to_string()
+}
+
 /// Build the Router. Accepts the AppState from `main.rs` (with a configured RelevanceHandle).
 /// Returns `Router<()>` and injects `Arc<ApiState>` via `Extension`.
+///
+/// IMPORTANT:
+/// - In `main.rs`, mount **static file serving as a fallback** (or under a distinct path),
+///   not as a greedy `/*` route before this API router. Otherwise POSTs to e.g. `/decide`
+///   can hit the static handler and return `405 GET,HEAD`.
 pub fn create_router(state_from_main: RelevanceAppState) -> Router<()> {
     // Load source weights from file
     let sw = SourceWeightsConfig::load_from_file("source_weights.json");
@@ -62,10 +72,14 @@ pub fn create_router(state_from_main: RelevanceAppState) -> Router<()> {
 
     // Base Router with explicit unit state
     let mut app: Router<()> = Router::new()
-        .route("/health", get(|| async { "ok" }))
+        .route("/health", get(|| async { "OK" }))
+        // UI primary endpoint (Step 3). Keep POST here so dev proxy can forward as-is.
         .route("/analyze", post(analyze))
+        // Batch scoring (internal/dev)
         .route("/batch", post(analyze_batch))
-        .route("/decide", post(decide_batch))
+        // Decision endpoint: POST for inputs; GET returns the last decision for convenience.
+        .route("/decide", post(decide_batch).get(debug_last_decision))
+        // Debug/introspection
         .route("/debug/rolling", get(debug_rolling))
         .route("/debug/history", get(debug_history))
         .route("/debug/last-decision", get(debug_last_decision))
@@ -86,8 +100,10 @@ pub fn create_router(state_from_main: RelevanceAppState) -> Router<()> {
         .layer(Extension(state))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 struct AnalyzeReq {
+    /// Text to analyze. Defaults to empty so `{}` works in dev.
+    #[serde(default)]
     text: String,
 }
 
@@ -99,34 +115,96 @@ struct DecideItem {
     ts_unix: Option<u64>,
 }
 
+// ---------- UI Step 3: Response shape for POST /analyze ----------
+
 #[derive(serde::Serialize)]
-struct AnalyzeResp {
-    score: i32,
-    tokens_count: usize,
+struct ApiEvidence {
+    title: String,
+    source: String,
+    url: String,
+    sentiment: String, // "pos" | "neg" | "neu"
+    time: String,      // human-readable or ISO/UNIX string
 }
+
+#[derive(serde::Serialize)]
+struct AnalyzeOut {
+    decision: String,     // "BUY" | "SELL" | "HOLD"
+    confidence: f32,      // 0..1
+    reasons: Vec<String>, // plain strings
+    evidence: Vec<ApiEvidence>,
+    contributors: Vec<String>,
+}
+
+// ----------------------------------------------------------------
 
 async fn analyze(
     Extension(state): Extension<Arc<ApiState>>,
     Json(body): Json<AnalyzeReq>,
-) -> Json<AnalyzeResp> {
+) -> Json<AnalyzeOut> {
     let t0 = Instant::now();
     if debug_enabled() {
         crate::debug::record_request(false);
     }
 
-    let (score, tokens) = state.analyzer.score_text(&body.text);
+    // Score to keep rolling/history consistent (even for demo payload).
+    let (score, _tokens) = state.analyzer.score_text(&body.text);
     state.rolling.record(score, None);
 
+    // Map score to a simple verdict.
+    let verdict = if score > 0 {
+        "BUY"
+    } else if score < 0 {
+        "SELL"
+    } else {
+        "HOLD"
+    };
+
+    let ts = now_string();
+
     if debug_enabled() {
-        let verdict = if score >= 0 { "BUY" } else { "SELL" };
         crate::debug::record_decision("analyze".to_string(), score, verdict.to_string());
         crate::debug::record_latency(t0.elapsed().as_millis());
     }
 
-    Json(AnalyzeResp {
-        score,
-        tokens_count: tokens,
-    })
+    // Demo-friendly payload matching the UI (can be swapped for real data later).
+    let out = AnalyzeOut {
+        decision: verdict.to_string(),
+        confidence: 0.74, // demo confidence; can be derived later from engine output
+        reasons: vec![
+            "Futures rebound after dovish remarks in FOMC minutes".to_string(),
+            "Positive breadth in Dow components during pre-market".to_string(),
+            "Sentiment shift detected in key sources (low noise)".to_string(),
+        ],
+        evidence: vec![
+            ApiEvidence {
+                title: "Fed signals patience; markets react positively".to_string(),
+                source: "Reuters".to_string(),
+                url: "#".to_string(),
+                sentiment: "pos".to_string(),
+                time: ts.clone(),
+            },
+            ApiEvidence {
+                title: "Dow futures edge higher amid earnings beats".to_string(),
+                source: "Bloomberg".to_string(),
+                url: "#".to_string(),
+                sentiment: "pos".to_string(),
+                time: ts.clone(),
+            },
+            ApiEvidence {
+                title: "Mixed commentary on industrials; net neutral".to_string(),
+                source: "WSJ".to_string(),
+                url: "#".to_string(),
+                sentiment: "neu".to_string(),
+                time: ts,
+            },
+        ],
+        contributors: vec![
+            "relevance-engine".to_string(),
+            "sentiment-core".to_string()
+        ],
+    };
+
+    Json(out)
 }
 
 async fn analyze_batch(
@@ -296,7 +374,7 @@ fn current_unix() -> u64 {
 fn volume_factor_from_history(hist: &History, now: u64) -> (f32, usize, usize) {
     let rows = hist.snapshot_last_n(200);
     let mut recent_triggers = 0usize;
-    let mut uniq = std::collections::HashSet::new();
+    let mut uniq: HashSet<String> = HashSet::new();
 
     for h in rows {
         if now.saturating_sub(h.ts_unix) <= VOLUME_WINDOW_SECS

@@ -3,8 +3,10 @@
 //!
 //! See `README.md` for quickstart and `docs/` for architecture notes.
 
+use shuttle_axum::axum::Router;
 use shuttle_axum::ShuttleAxum;
 use std::path::PathBuf;
+use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use dow_sentiment_analyzer::api;
@@ -35,13 +37,14 @@ fn enable_dev_tracing() {
         return;
     }
 
+    // Important: use `try_init()` so we don't panic under Shuttle which already sets a global subscriber.
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("relevance=info,warn"));
 
-    tracing_subscriber::registry()
+    let _ = tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().compact())
-        .init();
+        .try_init();
 }
 
 #[shuttle_runtime::main]
@@ -49,7 +52,7 @@ async fn axum() -> ShuttleAxum {
     // Load .env in local/dev; no-op in prod environments.
     let _ = dotenvy::dotenv();
 
-    // Initialize dev tracing early (no-op in production).
+    // Initialize dev tracing early (no-op in production or if already set by Shuttle).
     enable_dev_tracing();
 
     // --- Initialize relevance gate ---
@@ -62,9 +65,17 @@ async fn axum() -> ShuttleAxum {
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_RELEVANCE_CONFIG_PATH));
     start_hot_reload_thread(handle.clone(), path);
 
-    // Build AppState and pass it into the router
+    // Build AppState and pass it into the API router
     let state = AppState { relevance: handle };
-    let router = api::create_router(state);
+    let api_router = api::create_router(state);
 
-    Ok(router.into())
+    // Serve the compiled UI (ui/dist) at "/" with SPA fallback to index.html
+    let static_dir = ServeDir::new("ui/dist")
+        .not_found_service(ServeFile::new("ui/dist/index.html"));
+
+    let app = Router::new()
+        .nest("/api", api_router)
+        .fallback_service(static_dir);
+
+    Ok(app.into())
 }

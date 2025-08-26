@@ -198,10 +198,7 @@ async fn analyze(
                 time: ts,
             },
         ],
-        contributors: vec![
-            "relevance-engine".to_string(),
-            "sentiment-core".to_string()
-        ],
+        contributors: vec!["relevance-engine".to_string(), "sentiment-core".to_string()],
     };
 
     Json(out)

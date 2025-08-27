@@ -96,18 +96,18 @@ verb = 1
 [[anchors]]
 id = "djia_core_names"
 category = "hard"
-pattern = "(?i)\b(djia|dow jones|the dow)\b"
+pattern = "(?i)(djia|dow jones|the dow)"
 
 [[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
-pattern = "(?i)\bpowell\b"
-near = { pattern = "(?i)\b(fed|fomc|rates?)\b", window = 6 }
+pattern = "(?i)powell"
+near = { pattern = "(?i)(fed|fomc|rates?)", window = 6 }
 
 [[blockers]]
 id = "dji_drones"
-pattern = "(?i)\bdji\b"
-near = { pattern = "(?i)\b(drone|mavic|gimbal)\b", window = 4 }
+pattern = "(?i)dji"
+near = { pattern = "(?i)(drone|mavic|gimbal)", window = 4 }
 
 [[combos.pass_any]]
 need = ["macro","hard"]
@@ -189,6 +189,28 @@ The UI is designed as a single-page app that updates in real time.
 - [x] Evidence panel expands/collapses and shows reasons.
 - [x] Sentiment trend updates.
 - [x] UI loads successfully on Shuttle.
+
+---
+
+## Phase 3 – Contextual rules (AI-ready design)
+
+**Goal:** Reduce false positives, improve explainability, prepare logic for later AI integration.
+
+### Implemented
+- **NER + Regex/Keyword Config** – enriches reasons from JSON configs in `./config/`.
+- **Reranking** – keeps the latest relevant statement per source, decays earlier near-duplicates.
+- **Antispam** – filters near-identical statements in a sliding time window.
+- **Calibration** – confidence is dynamically influenced by `weights.json` (hot-reload).
+
+### Tests
+Synthetic integration suite lives in `tests/f3_synthetic.rs`.  
+Run it with:
+```bash
+cargo test f3_ -- --nocapture
+```
+All five tests (NER, Rerank, Antispam, Calibration, Rules) currently pass ✅.
+
+**Milestone:** Contextual rules are fully implemented, tested, and documented.
 
 ---
 

@@ -1,5 +1,7 @@
 # dow-sentiment-analyzer
 
+[![Build status](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/lumlich/dow-sentiment-analyzer/actions)
+
 A sentiment analysis and decision engine for Dow Jones futures, built with Rust, Axum, and Tokio.
 
 It processes short texts (e.g., statements by Trump, the Fed, Yellen, Reuters, etc.), scores sentiment with a small lexicon + negation handling, applies per-source weights, and produces a transparent BUY / HOLD / SELL decision with confidence and human-readable reasons.
@@ -142,6 +144,51 @@ If irrelevant (e.g., DJI drones):
   "reasons": ["neutralized: below relevance threshold"]
 }
 ```
+
+---
+
+## Phase 2 – Frontend UI
+
+The project now includes a frontend served together with the backend (via Shuttle).  
+The UI is designed as a single-page app that updates in real time.
+
+### 🖥️ Dev quickstart
+- `cd ui && npm install`
+- `npm run dev` (served on Vite dev server, proxied to backend on port 8000)
+- For Shuttle local backend: `cargo shuttle run`
+- Open http://localhost:5173
+
+### 🔌 API (dev)
+- Frontend fetches from `/analyze` → proxied to backend `/decide`.
+- Data format:
+  ```json
+  {
+    "decision": "BUY | SELL | HOLD",
+    "confidence": 0.83,
+    "reasons": ["Trump statement...", "Fed speech...", "Market data..."],
+    "contributors": ["Trump", "Fed"]
+  }
+  ```
+
+### 📊 Panels
+- **Verdict panel** – shows BUY/SELL/HOLD, color-coded, flashes on change.
+- **Why panel** – top 3 reasons.
+- **Evidence panel** – expandable accordion, shows detailed evidence (text + source + sentiment + timestamp).
+- **Sentiment trend** – mini sparkline chart (last X minutes).
+
+### ⚠️ Error handling
+- If fetch fails, UI shows a fallback message and retries on next poll.
+- Polling interval: 15s.
+
+### 🏗️ Build (prod)
+- `npm run build` → generates static assets in `/dist`
+- Served by Shuttle as part of the Rust project.
+
+### ✅ QA checklist
+- [x] Verdict panel changes color and plays alert sound on decision change.
+- [x] Evidence panel expands/collapses and shows reasons.
+- [x] Sentiment trend updates.
+- [x] UI loads successfully on Shuttle.
 
 ---
 

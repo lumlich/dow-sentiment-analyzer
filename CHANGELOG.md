@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Full test compatibility with `rand 0.9`; removed warnings and deprecated calls.
 
+## [v0.3.0] - 2025-08-27
+### Added
+- Contextual rules (Phase 3):
+  - NER + regex/keyword configs (`./config/*.json`) enrich reasons panel.
+  - Reranking: latest relevant statement per source, earlier near-duplicates decayed.
+  - Antispam: sliding-window filter for near-identical inputs (Levenshtein similarity).
+  - Calibration: confidence influenced by `weights.json`, hot-reload supported.
+- Synthetic integration suite (`tests/f3_synthetic.rs`) covering all contextual rules.
+
+### Changed
+- README updated with Phase 3 section.
+- Documentation clarified around contextual rules.
+
+### Fixed
+- Passing synthetic suite: 5/5 tests green (NER, Rerank, Antispam, Calibration, Rules).
+
 ## [v0.2.1] - 2025-08-25
 ### Added
 - Relevance gate: anchors, blockers, proximity, combos, and category weights.

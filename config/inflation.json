@@ -1,0 +1,14 @@
+{
+  "patterns": [
+    { "regex": "(?i)\\binflation\\b|\\binflationary\\b", "keyword": "inflation" },
+    { "regex": "(?i)\\bdisinflation\\b|\\bdeflation\\b", "keyword": "dis/deflation" },
+    { "regex": "(?i)\\bCPI\\b|\\bconsumer price(s)? index\\b", "keyword": "CPI" },
+    { "regex": "(?i)\\bcore CPI\\b", "keyword": "core CPI" },
+    { "regex": "(?i)\\bPCE\\b|\\bpersonal consumption expenditures\\b", "keyword": "PCE" },
+    { "regex": "(?i)\\bcore PCE\\b", "keyword": "core PCE" },
+    { "regex": "(?i)\\bPPI\\b|\\bproducer price(s)? index\\b", "keyword": "PPI" },
+    { "regex": "(?i)\\bwage (growth|inflation|pressures)\\b", "keyword": "wage pressures" },
+    { "regex": "(?i)\\bheadline (CPI|inflation)\\b", "keyword": "headline inflation" },
+    { "regex": "(?i)\\bsticky inflation\\b|\\bservices inflation\\b", "keyword": "sticky/services inflation" }
+  ]
+}

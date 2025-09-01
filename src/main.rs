@@ -1,17 +1,17 @@
 //! MVP Sentiment Service — Binary Entrypoint
 //! Boots the Axum HTTP server, wiring routes, shared state, and middleware.
 
-use shuttle_axum::axum::{routing::get_service, Router};
+use axum::{routing::get_service, Router};
 use shuttle_axum::ShuttleAxum;
 use std::path::PathBuf;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use dow_sentiment_analyzer::api;
 use dow_sentiment_analyzer::relevance::{
     start_hot_reload_thread, AppState, RelevanceEngine, RelevanceHandle,
     DEFAULT_RELEVANCE_CONFIG_PATH, ENV_RELEVANCE_CONFIG_PATH,
 };
+use dow_sentiment_analyzer::api;
 
 fn enable_dev_tracing() {
     let dev_flag = std::env::var("RELEVANCE_DEV_LOG")
@@ -48,13 +48,27 @@ fn ui_router() -> Router<()> {
     Router::new()
         .nest_service("/assets", assets)
         .route("/", get_service(index.clone()))
-        .route("/{*path}", get_service(index)) // <-- Axum 0.7 wildcard syntax
+        .route("/*path", get_service(index)) // wildcard for SPA refresh
 }
 
 #[shuttle_runtime::main]
 async fn axum() -> ShuttleAxum {
     let _ = dotenvy::dotenv();
     enable_dev_tracing();
+
+    // --- AI quick probe (local/dev only) ---
+    if matches!(
+        std::env::var("SHUTTLE_ENV")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "local" | "development" | "dev"
+    ) {
+        if let Err(e) = dow_sentiment_analyzer::run_ai_quick_probe().await {
+            tracing::warn!(error = ?e, "AI quick probe didn't run");
+        }
+    }
+    // --- /AI quick probe ---
 
     // Relevance gate
     let engine = RelevanceEngine::from_toml().expect("Failed to load relevance config");
@@ -64,12 +78,13 @@ async fn axum() -> ShuttleAxum {
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_RELEVANCE_CONFIG_PATH));
     start_hot_reload_thread(handle.clone(), path);
 
-    // API router
+    // API router — MUSÍ vracet Router<()>
     let state = AppState { relevance: handle };
-    let api_router = api::create_router(state); // exposes /analyze (POST), /decide (GET+POST), /health (GET)
+    let api_router: Router<()> = api::router(state);
 
-    // Merge API first, then GET-only SPA routes (no global fallback)
-    let app = api_router.merge(ui_router());
+    // Merge API + UI — vše Router<()>
+    let app: Router<()> = Router::new().merge(api_router).merge(ui_router());
 
+    // Shuttle očekává Axum service; From je implementováno pro Router<()>
     Ok(app.into())
 }

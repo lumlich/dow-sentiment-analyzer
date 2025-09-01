@@ -96,18 +96,18 @@ verb = 1
 [[anchors]]
 id = "djia_core_names"
 category = "hard"
-pattern = "(?i)(djia|dow jones|the dow)"
+pattern = "(?i)\b(djia|dow jones|the dow)\b"
 
 [[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
-pattern = "(?i)powell"
-near = { pattern = "(?i)(fed|fomc|rates?)", window = 6 }
+pattern = "(?i)\bpowell\b"
+near = { pattern = "(?i)\b(fed|fomc|rates?)\b", window = 6 }
 
 [[blockers]]
 id = "dji_drones"
-pattern = "(?i)dji"
-near = { pattern = "(?i)(drone|mavic|gimbal)", window = 4 }
+pattern = "(?i)\bdji\b"
+near = { pattern = "(?i)\b(drone|mavic|gimbal)\b", window = 4 }
 
 [[combos.pass_any]]
 need = ["macro","hard"]

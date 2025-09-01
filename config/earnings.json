@@ -1,0 +1,14 @@
+{
+  "patterns": [
+    { "regex": "(?i)\\bearnings\\b|\\bquarterly results\\b|\\bresults beat\\b|\\bresults miss\\b", "keyword": "earnings results" },
+    { "regex": "(?i)\\bEPS\\b|\\bearnings per share\\b", "keyword": "EPS" },
+    { "regex": "(?i)\\brevenue\\b|\\bsales\\b|\\btop line\\b", "keyword": "revenue" },
+    { "regex": "(?i)\\bguidance\\b|\\boutlook\\b|\\bforward(-| )look(ing)?\\b", "keyword": "guidance/outlook" },
+    { "regex": "(?i)\\bbeat(s|en)? (estimates|expectations|consensus)\\b", "keyword": "beat" },
+    { "regex": "(?i)\\bmiss(es|ed)? (estimates|expectations|consensus)\\b", "keyword": "miss" },
+    { "regex": "(?i)\\bupgrade(s|d)?\\b|\\bdowngrade(s|d)?\\b|\\bprice target\\b", "keyword": "analyst action" },
+    { "regex": "(?i)\\bprofit warning\\b|\\bpre(-| )announce(ment)?\\b", "keyword": "profit warning" },
+    { "regex": "(?i)\\bshare buyback\\b|\\brepurchase program\\b|\\bdividend increase\\b", "keyword": "capital return" },
+    { "regex": "(?i)\\bmargins? (expand|compress|pressure|improve|widen|narrow)\\b", "keyword": "margin move" }
+  ]
+}

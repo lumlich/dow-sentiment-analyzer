@@ -27,6 +27,11 @@ function formatTime(input?: string) {
   }).format(d);
 }
 
+/** Accept only real http(s) links (avoid "#" causing hash jumps/flash). */
+function httpLink(u?: string): string | undefined {
+  return u && /^https?:\/\//i.test(u) ? u : undefined;
+}
+
 export function EvidencePanel({ items }: EvidencePanelProps) {
   const [panelOpen, setPanelOpen] = useState(true);
 
@@ -79,6 +84,7 @@ export function EvidencePanel({ items }: EvidencePanelProps) {
             const isOpen = !!openMap[i];
             const sentiment = (it.sentiment ?? 'neu').toUpperCase();
             const time = formatTime(it.time);
+            const href = httpLink(it.url);
 
             return (
               <li key={i} class={`evidence-item ${isOpen ? 'open' : 'collapsed'}`}>
@@ -94,8 +100,8 @@ export function EvidencePanel({ items }: EvidencePanelProps) {
                   </button>
 
                   <div class="evidence-title">
-                    {it.url ? (
-                      <a href={it.url} target="_blank" rel="noreferrer">
+                    {href ? (
+                      <a href={href} target="_blank" rel="noreferrer">
                         {it.title || '(untitled)'}
                       </a>
                     ) : (
@@ -115,10 +121,10 @@ export function EvidencePanel({ items }: EvidencePanelProps) {
                         <time dateTime={it.time}>{time}</time>
                       </>
                     )}
-                    {it.url && (
+                    {href && (
                       <>
                         <span class="dot">•</span>
-                        <a class="visit-link" href={it.url} target="_blank" rel="noreferrer">
+                        <a class="visit-link" href={href} target="_blank" rel="noreferrer">
                           Open source
                         </a>
                       </>

@@ -2,6 +2,7 @@
 //! Relevance gate primitives: tokenizer, tag parsers, config types, regex compilation,
 //! proximity checks, and scoring.
 
+use crate::analyze::ai_adapter::{build_ai_client, AiClientDisabled, SharedAi};
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -11,6 +12,10 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime};
 use tracing::info;
+// --- AI gating env names ---
+pub const ENV_AI_SOURCES: &str = "AI_SOURCES"; // comma-separated allowlist
+pub const ENV_AI_ONLY_TOP: &str = "AI_ONLY_TOP_SOURCES"; // "1"=restrict to top sources (default 1)
+pub const ENV_AI_SCORE_BAND: &str = "AI_SCORE_BAND"; // near-threshold band (default 0.08)
 
 // --- env defaults & names ---
 pub const DEFAULT_RELEVANCE_CONFIG_PATH: &str = "config/relevance.toml";
@@ -46,6 +51,20 @@ impl AppState {
 
         Self { relevance: handle }
     }
+}
+
+/// Build AI client from env/config with safe fallbacks.
+pub fn ai_client_from_env() -> SharedAi {
+    // Hard override: allow env to disable AI irrespective of config file.
+    if std::env::var("AI_ENABLED").ok().as_deref() == Some("0") {
+        return Arc::new(AiClientDisabled) as SharedAi;
+    }
+
+    // Best-effort build from config/ai.json (interně si ji načte).
+    // `build_ai_client()` už vrací správně mock/real/disabled dle configu a AI_TEST_MODE.
+    let client = build_ai_client();
+
+    client
 }
 
 // Dev logging gate: RELEVANCE_DEV_LOG=1 AND dev env (debug or SHUTTLE_ENV in {local,development,dev})
@@ -112,6 +131,60 @@ pub(crate) fn truncate_vec<T: ToString>(v: &[T], max: usize) -> Vec<String> {
 fn parse_threshold_env(raw: Option<String>) -> Option<f32> {
     raw.and_then(|s| s.trim().parse::<f32>().ok())
         .map(|v| v.clamp(0.0, 1.0))
+}
+
+fn parse_bool_env(var: &str, default: bool) -> bool {
+    match std::env::var(var) {
+        Ok(v) => matches!(v.trim(), "1" | "true" | "TRUE" | "on" | "ON"),
+        Err(_) => default,
+    }
+}
+
+fn parse_f32_env(var: &str, default: f32) -> f32 {
+    std::env::var(var)
+        .ok()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .unwrap_or(default)
+}
+
+fn parse_list_env(var: &str) -> Option<Vec<String>> {
+    std::env::var(var).ok().map(|s| {
+        s.split(',')
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect::<Vec<_>>()
+    })
+}
+
+fn default_top_sources() -> &'static [&'static str] {
+    &[
+        "Trump",
+        "Powell",
+        "Yellen",
+        "Treasury",
+        "Fed",
+        "Federal Reserve",
+        "FOMC",
+        "Reuters",
+        "Bloomberg",
+        "WSJ",
+        "Wall Street Journal",
+        "Dow Jones",
+        "CNBC",
+        "White House",
+        "ECB",
+    ]
+}
+
+fn is_top_source(source: &str) -> bool {
+    if let Some(list) = parse_list_env(ENV_AI_SOURCES) {
+        let s = source.to_ascii_lowercase();
+        return list.iter().any(|it| it.to_ascii_lowercase() == s);
+    }
+    let s = source.to_ascii_lowercase();
+    default_top_sources()
+        .iter()
+        .any(|it| it.to_ascii_lowercase() == s)
 }
 
 /// Result of relevance evaluation
@@ -281,6 +354,57 @@ pub struct RelevanceEngine {
     pub cfg: RelevanceRoot,
     anchors: Vec<CompiledAnchor>,
     blockers: Vec<CompiledBlocker>,
+}
+
+/// Try to extract threshold value from reasons vector (looks for "threshold_ok:<num>").
+pub fn extract_threshold_from_reasons(rel: &Relevance) -> Option<f32> {
+    for r in &rel.reasons {
+        if let Some(tail) = r.strip_prefix("threshold_ok:") {
+            if let Ok(v) = tail.trim().parse::<f32>() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+/// Decide whether we should call the AI for cost-sensitive hints.
+/// Policy:
+/// - If blocked or neutralized (score == 0.0), return false.
+/// - Test bypass: if AI_TEST_MODE=mock → return true (client může být i tak disabled přes AI_ENABLED=0).
+/// - If ENV_AI_ONLY_TOP_SOURCES=1 (default true), require `source` to be a "top source"
+///   or to be present in ENV_AI_SOURCES allowlist.
+/// - If we passed the threshold, call AI only when `score` is within BAND above the threshold.
+///   BAND defaults to 0.08 and can be overridden by ENV_AI_SCORE_BAND.
+/// - Otherwise return false.
+pub fn ai_gate_should_call(source: &str, rel: &Relevance) -> bool {
+    // 0) If we didn't pass (blocked/neutralized), don't call AI.
+    if rel.score <= 0.0 {
+        return false;
+    }
+
+    // Test bypass (integration tests): allow AI calls whenever mock mode is on.
+    if std::env::var("AI_TEST_MODE")
+        .map(|v| v == "mock")
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    // 1) Source allowlist (default ON).
+    if parse_bool_env(ENV_AI_ONLY_TOP, true) && !is_top_source(source) {
+        return false;
+    }
+
+    // 2) Near-threshold band check (only if we can parse the threshold).
+    let band = parse_f32_env(ENV_AI_SCORE_BAND, 0.08_f32).abs();
+    if let Some(th) = extract_threshold_from_reasons(rel) {
+        let diff = (rel.score - th).max(0.0);
+        return diff <= band;
+    }
+
+    // 3) Fallback: if no threshold tag was present, be conservative.
+    false
 }
 
 impl RelevanceEngine {

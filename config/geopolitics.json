@@ -1,0 +1,14 @@
+{
+  "patterns": [
+    { "regex": "(?i)\\bsanction(s|ed|ing)?\\b|\\bexport controls?\\b|\\bembargo\\b", "keyword": "sanctions/export controls" },
+    { "regex": "(?i)\\btariff(s)?\\b|\\btrade (war|dispute|tensions)\\b", "keyword": "tariffs/trade tensions" },
+    { "regex": "(?i)\\binvasion\\b|\\bconflict\\b|\\bhostilities\\b|\\barmed (clash|conflict)\\b", "keyword": "conflict" },
+    { "regex": "(?i)\\bmissile\\b|\\bairstrike\\b|\\bdrone attack\\b|\\bbombard(ment|)\\b", "keyword": "military strike" },
+    { "regex": "(?i)\\bceasefire\\b|\\btruce\\b|\\bpeace (talks|deal|negotiations)\\b", "keyword": "ceasefire/peace talks" },
+    { "regex": "(?i)\\bNATO\\b|\\bArticle 5\\b|\\bdefense pact\\b", "keyword": "NATO/defense" },
+    { "regex": "(?i)\\bSouth China Sea\\b|\\bTaiwan Strait\\b|\\bStrait of Hormuz\\b|\\bRed Sea\\b|\\bSuez\\b", "keyword": "strategic waterways" },
+    { "regex": "(?i)\\bmartial law\\b|\\bstate of emergency\\b|\\bcurfew\\b", "keyword": "emergency measures" },
+    { "regex": "(?i)\\benergy (supply|disruption|embargo)\\b|\\bOPEC(\\+)? decision\\b", "keyword": "energy geopolitics" },
+    { "regex": "(?i)\\bcyberattack\\b|\\bcyber (operations|warfare)\\b", "keyword": "cyber operations" }
+  ]
+}

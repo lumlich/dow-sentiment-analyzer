@@ -1,43 +1,68 @@
 // tests/e2e_smoke.rs
+//
+// E2E smoke tests for the /decide endpoint using Axum 0.7.
+// We use shuttle_axum::axum reexports to keep the Router type identical
+// to the one used by the binary (prevents multiple-Axum-type mismatch).
+
+use std::{net::SocketAddr, time::Duration};
+
+use reqwest::StatusCode;
+use shuttle_axum::axum::{serve, Router};
+use tokio::net::TcpListener;
 
 use dow_sentiment_analyzer::api;
 use dow_sentiment_analyzer::relevance::{
     AppState as RelevanceAppState, RelevanceEngine, RelevanceHandle,
 };
-use shuttle_axum::axum::{
-    body::{to_bytes, Body},
-    http::{Request, StatusCode},
-    Router,
-};
-use tower::ServiceExt; // for `oneshot` (tower 0.5 with features=["util"])
+
+/// Spawn an Axum server on 127.0.0.1:0 (ephemeral port) and return the bound address.
+async fn spawn_server(app: Router) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = tokio::spawn(async move {
+        serve(listener, app.into_make_service())
+            .await
+            .expect("axum serve");
+    });
+    // Tiny delay to let the server accept connections.
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    (addr, handle)
+}
 
 #[tokio::test]
 async fn smoke_decide_cpi() {
-    // Point relevance engine to the local config file used in dev/tests
+    // Point relevance engine to the local config file used in dev/tests.
     std::env::set_var("RELEVANCE_CONFIG_PATH", "config/relevance.toml");
 
-    // Build a plain Axum Router without Shuttle runtime
+    // Build a plain Router (no Shuttle runtime).
     let engine = RelevanceEngine::from_toml().expect("load relevance config for tests");
     let handle = RelevanceHandle::new(engine);
-    let app: Router = api::create_router(RelevanceAppState { relevance: handle });
+    let app: Router = api::router(RelevanceAppState { relevance: handle });
 
-    // Minimal POST /decide request (one item)
-    let req = Request::builder()
-        .method("POST")
-        .uri("/decide")
+    let (addr, _jh) = spawn_server(app).await;
+    let client = reqwest::Client::new();
+
+    // Minimal POST /decide (one item).
+    let body = r#"[{"text":"US CPI cools to 3.2% YoY; core CPI eases.","source":"Reuters"}]"#;
+
+    let resp = client
+        .post(format!("http://{addr}/decide"))
         .header("content-type", "application/json")
-        .body(Body::from(
-            r#"[{"text":"US CPI cools to 3.2% YoY; core CPI eases.","source":"Reuters"}]"#,
-        ))
-        .unwrap();
+        .body(body.to_string())
+        .send()
+        .await
+        .expect("http call");
 
-    let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    // Read body and assert it contains a decision field
-    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let s = String::from_utf8(bytes.to_vec()).unwrap();
-    assert!(s.contains("\"decision\""));
+    // Ensure the response contains a "decision" field.
+    let s = resp.text().await.expect("read body");
+    assert!(
+        s.contains("\"decision\""),
+        "expected a `decision` field in response JSON, got: {s}"
+    );
 }
 
 #[tokio::test]
@@ -46,32 +71,36 @@ async fn smoke_decide_mix_with_neutralization() {
 
     let engine = RelevanceEngine::from_toml().expect("load relevance config for tests");
     let handle = RelevanceHandle::new(engine);
-    let app: Router = api::create_router(RelevanceAppState { relevance: handle });
+    let app: Router = api::router(RelevanceAppState { relevance: handle });
 
-    // Two items:
-    // 1) CPI + Dow (should pass relevance)
-    // 2) DJI + drone + negative verb (raw sentiment != 0) -> should be blocked by DJI-drones blocker,
-    //    thus counted as "neutralized" in reasons.
-    let req = Request::builder()
-        .method("POST")
-        .uri("/decide")
+    let (addr, _jh) = spawn_server(app).await;
+    let client = reqwest::Client::new();
+
+    // Two items: one relevant, one expected to be neutralized by rules.
+    let body = r#"
+        [
+            {"text":"CPI cools; the Dow rallies after the print.","source":"Reuters"},
+            {"text":"DJI drone sales slump after Mavic recall.","source":"Tech"}
+        ]
+    "#;
+
+    let resp = client
+        .post(format!("http://{addr}/decide"))
         .header("content-type", "application/json")
-        .body(Body::from(
-            r#"[
-                {"text":"CPI cools; the Dow rallies after the print.","source":"Reuters"},
-                {"text":"DJI drone sales slump after Mavic recall.","source":"Tech"}
-            ]"#,
-        ))
-        .unwrap();
+        .body(body.to_string())
+        .send()
+        .await
+        .expect("http call");
 
-    let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let s = String::from_utf8(bytes.to_vec()).unwrap();
+    let s = resp.text().await.expect("read body");
 
-    // Minimal E2E checks: decision exists and relevance gate neutralized something
-    assert!(s.contains("\"decision\""), "response body: {s}");
+    // Minimal E2E checks.
+    assert!(
+        s.contains("\"decision\""),
+        "expected a `decision` field in response JSON, got: {s}"
+    );
     assert!(
         s.contains("Relevance gate neutralized"),
         "expected neutralization summary in reasons; body: {s}"

@@ -1,17 +1,19 @@
 //! HTTP API Layer
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, RwLock, OnceLock};
 
-use shuttle_axum::axum::{
-    extract::{Extension, Query},
+use serde_json::Value;
+use axum::{
+    extract::Query,
+    http::HeaderValue,
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use tower_http::cors::CorsLayer;
 
-use crate::decision::Decision;
 use crate::disruption::{self, evaluate_with_weights, DisruptionInput};
 use crate::engine;
 use crate::history::History;
@@ -19,30 +21,52 @@ use crate::rolling::RollingWindow;
 use crate::sentiment::{BatchItem, SentimentAnalyzer};
 use crate::source_weights::SourceWeightsConfig;
 
-// bring relevance types/helpers (engine/handle/state + dev logs)
+// relevance helpers (engine/handle/state + dev logs)
 use crate::relevance::{
-    anon_hash, dev_logging_enabled, truncate_vec, AppState as RelevanceAppState, RelevanceHandle,
+    ai_client_from_env, ai_gate_should_call, anon_hash, dev_logging_enabled, truncate_vec,
+    AppState as RelevanceAppState, RelevanceHandle,
 };
+
+// AI sanitize helper
+use crate::analyze::ai_adapter::sanitize_reason;
 
 // tracing for dev-only audit logs
 use tracing::info;
 
 const VOLUME_WINDOW_SECS: u64 = 600; // 10 min
 
-/// Internal API state used by handlers (wrapped in Arc and injected via Extension).
+/// Globální úložiště stavu pro handlery (aby Router zůstal Router<()>).
+static API_STATE: OnceLock<Arc<ApiState>> = OnceLock::new();
+
+fn app_state() -> &'static ApiState {
+    API_STATE.get().expect("API_STATE not initialized").as_ref()
+}
+
+/// Denní počitadlo AI volání (sdílené mezi požadavky v rámci procesu).
+#[derive(Clone, Debug)]
+struct DailyAiCounter {
+    day: u64,  // číslo dne (unix_days = unix_secs / 86400)
+    used: usize,
+}
+
+/// Internal API state used by handlers.
 #[derive(Clone)]
-pub struct ApiState {
+struct ApiState {
     analyzer: Arc<SentimentAnalyzer>,
     rolling: Arc<RollingWindow>,
     history: Arc<History>,
     source_weights: Arc<RwLock<SourceWeightsConfig>>,
     relevance: RelevanceHandle,
+    /// AI adapter. Called only when gate says it makes sense.
+    ai: Arc<dyn crate::analyze::ai_adapter::AiClient + Send + Sync>,
+    /// Denní limiter pro AI hlavičky/volání.
+    ai_daily: Arc<RwLock<DailyAiCounter>>,
+    /// Jednoduchá cache pro AI reason podle vstupu (hash korpusu).
+    ai_cache: Arc<RwLock<HashMap<u64, String>>>,
 }
 
 fn debug_enabled() -> bool {
-    std::env::var("SHUTTLE_ENV")
-        .map(|v| v == "local")
-        .unwrap_or(false)
+    std::env::var("SHUTTLE_ENV").map(|v| v == "local").unwrap_or(false)
 }
 
 // Return current UNIX time as string (for UI "time" field)
@@ -50,16 +74,22 @@ fn now_string() -> String {
     current_unix().to_string()
 }
 
+fn current_day(unix: u64) -> u64 {
+    unix / 86_400
+}
+
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
+
 /// Build the Router. Accepts the AppState from `main.rs` (with a configured RelevanceHandle).
-/// Returns `Router<()>` and injects `Arc<ApiState>` via `Extension`.
-///
-/// IMPORTANT:
-/// - In `main.rs`, mount **static file serving as a fallback** (or under a distinct path),
-///   not as a greedy `/*` route before this API router. Otherwise POSTs to e.g. `/decide`
-///   can hit the static handler and return `405 GET,HEAD`.
-pub fn create_router(state_from_main: RelevanceAppState) -> Router<()> {
+/// Returns `Router(())` a inicializuje globální `API_STATE`.
+pub fn router(state_from_main: RelevanceAppState) -> Router<()> {
     // Load source weights from file
     let sw = SourceWeightsConfig::load_from_file("source_weights.json");
+    let now = current_unix();
 
     // Build full API state (reuse the relevance handle provided by main)
     let state = Arc::new(ApiState {
@@ -67,18 +97,26 @@ pub fn create_router(state_from_main: RelevanceAppState) -> Router<()> {
         rolling: Arc::new(RollingWindow::new_48h()),
         history: Arc::new(History::with_capacity(2000)),
         source_weights: Arc::new(RwLock::new(sw)),
-        relevance: state_from_main.relevance, // <-- from main.rs
+        relevance: state_from_main.relevance,
+        ai: ai_client_from_env(),
+        ai_daily: Arc::new(RwLock::new(DailyAiCounter {
+            day: current_day(now),
+            used: 0,
+        })),
+        ai_cache: Arc::new(RwLock::new(HashMap::new())),
     });
 
-    // Base Router with explicit unit state
-    let mut app: Router<()> = Router::new()
+    let _ = API_STATE.set(state);
+
+    // Build router s explicitním S = ()
+    Router::<()>::new()
         .route("/health", get(|| async { "OK" }))
         // UI primary endpoint (Step 3). Keep POST here so dev proxy can forward as-is.
         .route("/analyze", post(analyze))
         // Batch scoring (internal/dev)
         .route("/batch", post(analyze_batch))
-        // Decision endpoint: POST for inputs; GET returns the last decision for convenience.
-        .route("/decide", post(decide_batch).get(debug_last_decision))
+        // Decision endpoint: POST + GET (GET = poslední rozhodnutí)
+        .route("/decide", post(decide).get(debug_last_decision))
         // Debug/introspection
         .route("/debug/rolling", get(debug_rolling))
         .route("/debug/history", get(debug_history))
@@ -87,17 +125,8 @@ pub fn create_router(state_from_main: RelevanceAppState) -> Router<()> {
         .route(
             "/admin/reload-source-weights",
             get(admin_reload_source_weights),
-        );
-
-    // Optionally merge debug router (keeps Router<()>)
-    if debug_enabled() {
-        let dbg: Router<()> = crate::debug::router();
-        app = app.merge(dbg);
-    }
-
-    // Layers last — they do not change router state type
-    app.layer(CorsLayer::very_permissive())
-        .layer(Extension(state))
+        )
+        .layer(CorsLayer::very_permissive())
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -137,39 +166,28 @@ struct AnalyzeOut {
 
 // ----------------------------------------------------------------
 
-async fn analyze(
-    Extension(state): Extension<Arc<ApiState>>,
-    Json(body): Json<AnalyzeReq>,
-) -> Json<AnalyzeOut> {
-    let t0 = Instant::now();
+async fn analyze(Json(body): Json<AnalyzeReq>) -> Json<AnalyzeOut> {
+    let state = app_state();
+    let t0 = std::time::Instant::now();
     if debug_enabled() {
-        crate::debug::record_request(false);
+        info!(target: "api_debug", event = "request", path = "/analyze", batch = false);
     }
 
-    // Score to keep rolling/history consistent (even for demo payload).
     let (score, _tokens) = state.analyzer.score_text(&body.text);
     state.rolling.record(score, None);
 
-    // Map score to a simple verdict.
-    let verdict = if score > 0 {
-        "BUY"
-    } else if score < 0 {
-        "SELL"
-    } else {
-        "HOLD"
-    };
+    let verdict = if score > 0 { "BUY" } else if score < 0 { "SELL" } else { "HOLD" };
 
     let ts = now_string();
 
     if debug_enabled() {
-        crate::debug::record_decision("analyze".to_string(), score, verdict.to_string());
-        crate::debug::record_latency(t0.elapsed().as_millis());
+        info!(target: "api_debug", event = "decision", path = "/analyze", score = score, verdict = %verdict);
+        info!(target: "api_debug", event = "latency_ms", path = "/analyze", ms = t0.elapsed().as_millis());
     }
 
-    // Demo-friendly payload matching the UI (can be swapped for real data later).
     let out = AnalyzeOut {
         decision: verdict.to_string(),
-        confidence: 0.74, // demo confidence; can be derived later from engine output
+        confidence: 0.74,
         reasons: vec![
             "Futures rebound after dovish remarks in FOMC minutes".to_string(),
             "Positive breadth in Dow components during pre-market".to_string(),
@@ -204,13 +222,11 @@ async fn analyze(
     Json(out)
 }
 
-async fn analyze_batch(
-    Extension(state): Extension<Arc<ApiState>>,
-    Json(items): Json<Vec<BatchItem>>,
-) -> Json<Vec<(BatchItem, i32)>> {
-    let t0 = Instant::now();
+async fn analyze_batch(Json(items): Json<Vec<BatchItem>>) -> Json<Vec<(BatchItem, i32)>> {
+    let state = app_state();
+    let t0 = std::time::Instant::now();
     if debug_enabled() {
-        crate::debug::record_request(true);
+        info!(target: "api_debug", event = "request", path = "/batch", batch = true);
     }
 
     let scored = items
@@ -236,100 +252,220 @@ async fn analyze_batch(
             (sum / scored.len() as i64) as i32
         };
         let verdict = if avg >= 0 { "BUY" } else { "SELL" };
-        crate::debug::record_decision("batch".to_string(), avg, verdict.to_string());
-        crate::debug::record_latency(t0.elapsed().as_millis());
+        info!(target: "api_debug", event = "decision", path = "/batch", avg_score = avg, verdict = %verdict);
+        info!(target: "api_debug", event = "latency_ms", path = "/batch", ms = t0.elapsed().as_millis());
     }
 
     Json(scored)
 }
 
-async fn decide_batch(
-    Extension(state): Extension<Arc<ApiState>>,
-    Json(items): Json<Vec<DecideItem>>,
-) -> Json<Decision> {
-    let t0 = Instant::now();
-    if debug_enabled() {
-        crate::debug::record_request(true);
+// ---- Helper: vyhodnotí, zda AI „skutečně přispěla“ (pak se počítá jako used)
+fn ai_reason_counts_as_used(reason: &str) -> bool {
+    if reason.trim().is_empty() {
+        return false;
     }
+    let r = reason.to_ascii_lowercase();
+    let blockers = [
+        "limit", "exceed", "exceeded", "disabled", "band",
+        "quota", "rate", "limited", "throttle", "throttled",
+        "exhaust", "exhausted", "reach", "reached",
+        "cap", "capped", "cooldown", "cool down",
+        "suspend", "suspended", "turned off", "off",
+        "quota exceeded", "daily limit", "day limit", "over quota",
+        "temporarily unavailable", "not available", "unavailable",
+    ];
+    !blockers.iter().any(|kw| r.contains(kw))
+}
 
-    let now = current_unix();
-    let mut scored = Vec::with_capacity(items.len());
+/// AI volání čistě async (bez `spawn_blocking`), aby handler future zůstal `Send`.
+async fn ai_analyze_safely(
+    ai: Arc<dyn crate::analyze::ai_adapter::AiClient + Send + Sync>,
+    ai_corpus: String,
+) -> Option<String> {
+    ai.analyze(&ai_corpus)
+        .await
+        .map(|ai_out| sanitize_reason(&ai_out.short_reason))
+}
 
-    let mut neutralized = 0usize;
-    let total = items.len();
+#[axum::debug_handler]
+async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
 
-    for it in items {
-        // 1) Raw sentiment
-        let (raw_score, _tokens) = state.analyzer.score_text(&it.text);
+    // -------- 1) FÁZE BEZ await: vše se state v samostatném scope --------
+    let (scored, neutralized, total, ai_corpus_opt, now) = {
+        let state = app_state();
+        let now = current_unix();
+        let mut items: Vec<DecideItem> = {
+            fn normalize_decide_body(v: Value) -> Vec<DecideItem> {
+                match v {
+                    Value::Array(arr) => arr
+                        .into_iter()
+                        .filter_map(|x| serde_json::from_value::<DecideItem>(x).ok())
+                        .collect(),
+                    Value::Object(map) => {
+                        if let Some(items) = map.get("inputs").or_else(|| map.get("items")) {
+                            if let Ok(vec_items) = serde_json::from_value::<Vec<DecideItem>>(items.clone()) {
+                                return vec_items;
+                            }
+                        }
+                        serde_json::from_value::<DecideItem>(Value::Object(map))
+                            .ok()
+                            .map(|it| vec![it])
+                            .unwrap_or_default()
+                    }
+                    Value::Null => Vec::new(),
+                    _ => Vec::new(),
+                }
+            }
+            normalize_decide_body(body)
+        };
 
-        // 2) Relevance gate
-        let rel = state.relevance.score(&it.text);
-        let gated_score = if rel.score > 0.0 { raw_score } else { 0 };
+        let mut scored = Vec::with_capacity(items.len());
+        let mut neutralized = 0usize;
+        let total = items.len();
+        let mut ai_gated_texts: Vec<String> = Vec::new();
 
-        // --- dev-only relevance audit log (anonymized) ---
-        if dev_logging_enabled() {
-            let event = if rel.score > 0.0 {
-                "api_pass"
-            } else {
-                "api_neutralized"
+        for it in items.drain(..) {
+            let (raw_score, _tokens) = state.analyzer.score_text(&it.text);
+            let rel = state.relevance.score(&it.text);
+            let gated_score = if rel.score > 0.0 { raw_score } else { 0 };
+
+            if ai_gate_should_call(&it.source, &rel) {
+                ai_gated_texts.push(it.text.clone());
+            }
+
+            if dev_logging_enabled() {
+                let event = if rel.score > 0.0 { "api_pass" } else { "api_neutralized" };
+                info!(
+                    target: "relevance",
+                    event,
+                    id = %anon_hash(&it.text),
+                    matched = ?truncate_vec(&rel.matched, 5),
+                    reasons = ?truncate_vec(&rel.reasons, 5),
+                    rel_score = rel.score,
+                    raw = raw_score,
+                    gated = gated_score
+                );
+            }
+
+            if gated_score == 0 && raw_score != 0 {
+                neutralized += 1;
+            }
+
+            state.rolling.record(gated_score, None);
+            let ts = it.ts_unix.unwrap_or(now);
+
+            let di = DisruptionInput {
+                source: it.source.clone(),
+                text: it.text.clone(),
+                score: gated_score,
+                ts_unix: ts,
             };
-            info!(
-                target: "relevance",
-                event,
-                id = %anon_hash(&it.text),                   // no raw text
-                matched = ?truncate_vec(&rel.matched, 5),
-                reasons = ?truncate_vec(&rel.reasons, 5),
-                rel_score = rel.score,
-                raw = raw_score,
-                gated = gated_score
-            );
+            let res = {
+                let guard = state.source_weights.read().expect("rwlock poisoned");
+                evaluate_with_weights(&di, &guard)
+            };
+
+            let bi = BatchItem { source: it.source, text: it.text };
+            scored.push((bi, gated_score, res));
         }
 
-        if gated_score == 0 && raw_score != 0 {
-            neutralized += 1;
+        // připravíme AI korpus (když je co) – jen string, žádné zamky/držení state
+        let ai_corpus_opt = if !ai_gated_texts.is_empty() {
+            let mut s = String::new();
+            for t in ai_gated_texts.iter().take(8) {
+                if !s.is_empty() { s.push_str("\n\n"); }
+                s.push_str(t);
+            }
+            Some(s)
+        } else {
+            None
+        };
+
+        (scored, neutralized, total, ai_corpus_opt, now)
+    }; // <- zde padá &state a vše s ním spojené, před awaitem!
+
+    // -------- 2) PŘED await: rychlý cache-read a denní limit (bez držení locků přes await) --------
+    let (ai_disabled, limit_opt) = (
+        std::env::var("AI_ENABLED").ok().map(|v| v == "0").unwrap_or(false),
+        std::env::var("AI_DAILY_LIMIT").ok().and_then(|s| s.parse::<usize>().ok()),
+    );
+
+    let mut ai_reason: Option<String> = None;
+    let mut should_call_ai = false;
+    let cache_key_opt = ai_corpus_opt.as_ref().map(|c| hash_bytes(c.as_bytes()));
+
+    if let (Some(cache_key), false) = (cache_key_opt, ai_disabled) {
+        // 2a) read-cache (krátký guard, nepřenáší se přes await)
+        if let Some(cached) = {
+            let st = app_state();
+            st.ai_cache.read().ok().and_then(|g| g.get(&cache_key).cloned())
+        } {
+            if !cached.is_empty() {
+                ai_reason = Some(cached);
+            }
+        } else {
+            // 2b) zkontrolovat denní limit
+            let over_limit = {
+                let today = current_day(current_unix());
+                let st = app_state();
+                if let Some(lim) = limit_opt {
+                    let mut g = st.ai_daily.write().expect("ai_daily poisoned");
+                    if g.day != today { g.day = today; g.used = 0; }
+                    g.used >= lim
+                } else {
+                    false
+                }
+            };
+            should_call_ai = !over_limit;
         }
-
-        // 3) Record & disruption with gated score
-        state.rolling.record(gated_score, None);
-        let ts = it.ts_unix.unwrap_or(now);
-
-        let di = DisruptionInput {
-            source: it.source.clone(),
-            text: it.text.clone(),
-            score: gated_score,
-            ts_unix: ts,
-        };
-        let res = {
-            let guard = state.source_weights.read().expect("rwlock poisoned");
-            evaluate_with_weights(&di, &guard)
-        };
-
-        let bi = BatchItem {
-            source: it.source,
-            text: it.text,
-        };
-        scored.push((bi, gated_score, res));
     }
 
-    // 4) Decision from gated inputs
+    // -------- 3) JEDINÝ await: AI analýza (pouze pokud není cache hit a nejsme over-limit) --------
+    if ai_reason.is_none() && should_call_ai {
+        if let Some(ai_corpus) = &ai_corpus_opt {
+            let ai_client = { app_state().ai.clone() }; // získáme Arc, žádný guard
+            if let Some(r) = ai_analyze_safely(ai_client, ai_corpus.clone()).await {
+                if ai_reason_counts_as_used(&r) {
+                    ai_reason = Some(r.clone());
+
+                    // 3a) po await → zapsat do cache
+                    if let Some(cache_key) = cache_key_opt {
+                        let st = app_state();
+                        if let Ok(mut c) = st.ai_cache.write() {
+                            c.insert(cache_key, r);
+                        }
+                    }
+                    // 3b) po await → inkrementovat denní čítač (pokud je limit nastaven)
+                    if limit_opt.is_some() {
+                        let today = current_day(current_unix());
+                        let st = app_state();
+                        let mut g = st.ai_daily.write().expect("ai_daily poisoned");
+                        if g.day != today { g.day = today; g.used = 0; }
+                        g.used = g.used.saturating_add(1);
+                    }
+                }
+            }
+        }
+    }
+
+    // -------- 4) FÁZE PO await: znovu si vezmeme state a dostavíme odpověď --------
+    let state = app_state();
+
     let mut decision = engine::make_decision(&scored);
 
-    // 5) Volume context modifier
     let (vf, recent_triggers, uniq_sources) = volume_factor_from_history(&state.history, now);
     let old_conf = decision.confidence;
     let new_conf = (old_conf * vf).clamp(0.0, 0.99);
     decision.confidence = new_conf;
-
     decision.reasons.push(
         crate::decision::Reason::new(format!(
-            "Volume context (last {window}s): {rt} triggers from {us} sources -> confidence x{vf:.3} ({old:.3}→{new:.3})",
+            "Volume context (last {window}s): {rt} triggers from {us} sources -> confidence x{vf:.3} ({old:.3}->{new:.3})",
             window = VOLUME_WINDOW_SECS, rt = recent_triggers, us = uniq_sources, vf = vf, old = old_conf, new = new_conf,
         ))
         .kind(crate::decision::ReasonKind::Threshold)
         .weighted(((vf - 0.90) / (1.05 - 0.90)).clamp(0.0, 1.0)),
     );
 
-    // 6) Relevance-gate note
     if neutralized > 0 && total > 0 {
         let frac = neutralized as f32 / total as f32;
         decision.reasons.push(
@@ -342,23 +478,43 @@ async fn decide_batch(
         );
     }
 
-    // 7) Persist decision
-    state.history.push(&decision);
-
-    if debug_enabled() {
-        let verdict = format!("{:?}", decision.decision).to_uppercase();
-        let avg: i32 = if scored.is_empty() {
-            0
-        } else {
-            let sum: i64 = scored.iter().map(|(_, s, _)| *s as i64).sum();
-            (sum / scored.len() as i64) as i32
-        };
-        crate::debug::record_decision("decide".to_string(), avg, verdict);
-        crate::debug::record_latency(t0.elapsed().as_millis());
+    if let Some(r) = &ai_reason {
+        decision.reasons.push(
+            crate::decision::Reason::new(format!("AI hint: {}", r))
+                .kind(crate::decision::ReasonKind::Threshold)
+                .weighted(0.5),
+        );
+        let before = decision.confidence;
+        let after = (before + 0.02).clamp(0.0, 0.99);
+        if after != before {
+            decision.confidence = after;
+            decision.reasons.push(
+                crate::decision::Reason::new(format!(
+                    "AI hint nudged confidence +0.02 ({before:.3}->{after:.3})"
+                ))
+                .kind(crate::decision::ReasonKind::Threshold)
+                .weighted(0.1),
+            );
+        }
     }
 
-    Json(decision)
+    state.history.push(&decision);
+
+    let mut resp = axum::Json(decision).into_response();
+    resp.headers_mut().insert(
+        "X-AI-Used",
+        HeaderValue::from_static(if ai_reason.is_some() { "1" } else { "0" }),
+    );
+    if let Some(r) = ai_reason {
+        if let Ok(hv) = HeaderValue::from_str(&r) {
+            resp.headers_mut().insert("X-AI-Reason", hv);
+        } else {
+            resp.headers_mut().insert("X-AI-Reason", HeaderValue::from_static("sanitized"));
+        }
+    }
+    resp
 }
+
 
 fn current_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -402,7 +558,8 @@ struct RollingInfo {
     count: usize,
 }
 
-async fn debug_rolling(Extension(state): Extension<Arc<ApiState>>) -> Json<RollingInfo> {
+async fn debug_rolling() -> Json<RollingInfo> {
+    let state = app_state();
     let (avg, n) = state.rolling.average_and_count();
     Json(RollingInfo {
         window_secs: state.rolling.window_secs(),
@@ -420,7 +577,8 @@ struct HistoryOut {
     scores: Vec<i32>,
 }
 
-async fn debug_history(Extension(state): Extension<Arc<ApiState>>) -> Json<Vec<HistoryOut>> {
+async fn debug_history() -> Json<Vec<HistoryOut>> {
+    let state = app_state();
     let rows = state.history.snapshot_last_n(10);
     Json(
         rows.into_iter()
@@ -444,7 +602,8 @@ struct LastOut {
     scores: Vec<i32>,
 }
 
-async fn debug_last_decision(Extension(state): Extension<Arc<ApiState>>) -> Json<Option<LastOut>> {
+async fn debug_last_decision() -> Json<Option<LastOut>> {
+    let state = app_state();
     let mut rows = state.history.snapshot_last_n(1);
     if let Some(h) = rows.pop() {
         return Json(Some(LastOut {
@@ -458,10 +617,8 @@ async fn debug_last_decision(Extension(state): Extension<Arc<ApiState>>) -> Json
     Json(None)
 }
 
-async fn debug_source_weight(
-    Extension(state): Extension<Arc<ApiState>>,
-    Query(q): Query<HashMap<String, String>>,
-) -> String {
+async fn debug_source_weight(Query(q): Query<HashMap<String, String>>) -> String {
+    let state = app_state();
     let s = q.get("source").cloned().unwrap_or_default();
     let w = {
         let g = state.source_weights.read().expect("rwlock poisoned");
@@ -470,7 +627,8 @@ async fn debug_source_weight(
     format!("source='{}' -> weight={:.2}", s, w)
 }
 
-async fn admin_reload_source_weights(Extension(state): Extension<Arc<ApiState>>) -> String {
+async fn admin_reload_source_weights() -> String {
+    let state = app_state();
     let fresh = SourceWeightsConfig::load_from_file("source_weights.json");
     match state.source_weights.write() {
         Ok(mut w) => {

@@ -7,12 +7,12 @@ use std::sync::{Arc, RwLock, OnceLock};
 use serde_json::Value;
 use axum::{
     extract::Query,
-    http::HeaderValue,
+    http::{HeaderValue, Method, header},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{CorsLayer, Any};
 
 use crate::disruption::{self, evaluate_with_weights, DisruptionInput};
 use crate::engine;
@@ -108,6 +108,29 @@ pub fn router(state_from_main: RelevanceAppState) -> Router<()> {
 
     let _ = API_STATE.set(state);
 
+    // --- NEW: CORS whitelist řízený env proměnnou ---
+    // ALLOWED_ORIGINS="http://localhost:5173,https://app.example.com"
+    let allowed = std::env::var("ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "http://localhost:5173".to_string());
+
+    let origins: Vec<HeaderValue> = allowed
+        .split(',')
+        .filter_map(|o| HeaderValue::from_str(o.trim()).ok())
+        .collect();
+
+    let cors = if origins.is_empty() {
+        // Fallback (neměl by nastat): povol vše, ale jen základní hlavičky/metody
+        CorsLayer::new()
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers([header::CONTENT_TYPE])
+            .allow_origin(Any)
+    } else {
+        CorsLayer::new()
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers([header::CONTENT_TYPE])
+            .allow_origin(origins)
+    };
+
     // Build router s explicitním S = ()
     Router::<()>::new()
         .route("/health", get(|| async { "OK" }))
@@ -126,7 +149,7 @@ pub fn router(state_from_main: RelevanceAppState) -> Router<()> {
             "/admin/reload-source-weights",
             get(admin_reload_source_weights),
         )
-        .layer(CorsLayer::very_permissive())
+        .layer(cors)
 }
 
 #[derive(serde::Deserialize, Default)]

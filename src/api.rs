@@ -69,6 +69,10 @@ fn debug_enabled() -> bool {
     std::env::var("SHUTTLE_ENV").map(|v| v == "local").unwrap_or(false)
 }
 
+fn debug_routes_enabled() -> bool {
+    debug_enabled() || std::env::var("DEBUG_ROUTES").map(|v| v == "1").unwrap_or(false)
+}
+
 // Return current UNIX time as string (for UI "time" field)
 fn now_string() -> String {
     current_unix().to_string()
@@ -108,7 +112,7 @@ pub fn router(state_from_main: RelevanceAppState) -> Router<()> {
 
     let _ = API_STATE.set(state);
 
-    // --- NEW: CORS whitelist řízený env proměnnou ---
+    // --- CORS whitelist řízený env proměnnou ---
     // ALLOWED_ORIGINS="http://localhost:5173,https://app.example.com"
     let allowed = std::env::var("ALLOWED_ORIGINS")
         .unwrap_or_else(|_| "http://localhost:5173".to_string());
@@ -119,7 +123,7 @@ pub fn router(state_from_main: RelevanceAppState) -> Router<()> {
         .collect();
 
     let cors = if origins.is_empty() {
-        // Fallback (neměl by nastat): povol vše, ale jen základní hlavičky/metody
+        // Fallback: povol vše, ale jen základní hlavičky/metody
         CorsLayer::new()
             .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
             .allow_headers([header::CONTENT_TYPE])
@@ -132,24 +136,28 @@ pub fn router(state_from_main: RelevanceAppState) -> Router<()> {
     };
 
     // Build router s explicitním S = ()
-    Router::<()>::new()
+    let mut r = Router::<()>::new()
         .route("/health", get(|| async { "OK" }))
         // UI primary endpoint (Step 3). Keep POST here so dev proxy can forward as-is.
         .route("/analyze", post(analyze))
         // Batch scoring (internal/dev)
         .route("/batch", post(analyze_batch))
-        // Decision endpoint: POST + GET (GET = poslední rozhodnutí)
-        .route("/decide", post(decide).get(debug_last_decision))
-        // Debug/introspection
-        .route("/debug/rolling", get(debug_rolling))
-        .route("/debug/history", get(debug_history))
-        .route("/debug/last-decision", get(debug_last_decision))
-        .route("/debug/source-weight", get(debug_source_weight))
-        .route(
-            "/admin/reload-source-weights",
-            get(admin_reload_source_weights),
-        )
-        .layer(cors)
+        // Decision endpoint: POST je veřejný vždy
+        .route("/decide", post(decide));
+
+    // Debug / introspection jen když je povoleno
+    if debug_routes_enabled() {
+        r = r
+            // GET na poslední rozhodnutí (jen debug)
+            .route("/decide", get(debug_last_decision))
+            .route("/debug/rolling", get(debug_rolling))
+            .route("/debug/history", get(debug_history))
+            .route("/debug/last-decision", get(debug_last_decision))
+            .route("/debug/source-weight", get(debug_source_weight))
+            .route("/admin/reload-source-weights", get(admin_reload_source_weights));
+    }
+
+    r.layer(cors)
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -187,7 +195,7 @@ struct AnalyzeOut {
     contributors: Vec<String>,
 }
 
-// ---- NEW: AI response metadata for /decide ----
+// ---- AI response metadata for /decide ----
 
 #[derive(serde::Serialize, Default)]
 struct ApiAiInfo {

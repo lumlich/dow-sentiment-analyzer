@@ -30,33 +30,79 @@ cargo fmt
 cargo clippy -- -D warnings
 cargo test
 
-# run locally (Shuttle dev runtime)
+# run locally (Shuttle dev runtime) – use this (do not use `cargo run`)
 cargo shuttle run
 ```
+> **Note:** The service runs under Shuttle's local runtime. Use `cargo shuttle run` instead of `cargo run`.
 
 ---
 
 ## Usage (API examples)
 
-### GET /health
+### GET /health  (root)
 ```bash
 curl -s http://localhost:8000/health
 ```
 Response:
 ```
-ok
+OK
 ```
 
-### POST /analyze
+### GET /api/ping
 ```bash
-curl -s -X POST http://localhost:8000/analyze   -H "Content-Type: application/json"   -d '{"text":"Fed signals a cautious path to rate cuts this year.","source":"Fed"}'
+curl -s http://localhost:8000/api/ping
+```
+Response:
+```
+pong
 ```
 
-### POST /batch
+### POST /api/analyze
 ```bash
-curl -s -X POST http://localhost:8000/batch   -H "Content-Type: application/json"   -d '[{"id":"a1","text":"Trump says Dow will soar.","source":"Trump"},
+curl -s -X POST http://localhost:8000/api/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Fed signals a cautious path to rate cuts this year.","source":"Fed"}'
+```
+
+### POST /api/batch
+```bash
+curl -s -X POST http://localhost:8000/api/batch \
+  -H "Content-Type: application/json" \
+  -d '[{"id":"a1","text":"Trump says Dow will soar.","source":"Trump"},
        {"id":"b2","text":"Reuters: unexpected slowdown in manufacturing.","source":"Reuters"}]'
 ```
+
+### POST /api/decide
+```bash
+curl -s -X POST http://localhost:8000/api/decide \
+  -H "Content-Type: application/json" \
+  -d '[{"source":"Reuters","text":"ISM manufacturing dips below 50; the Dow slips."}]'
+```
+Response (example):
+```json
+{
+  "decision": "SELL",
+  "confidence": 0.68,
+  "reasons": [
+    "macro+hard combo matched",
+    "Relevance gate passed with score 0.47"
+  ]
+}
+```
+If irrelevant (e.g., DJI drones):
+```json
+{
+  "decision": "NEUTRAL",
+  "reasons": ["neutralized: below relevance threshold"]
+}
+```
+
+> **Windows / PowerShell tip:** `curl` is an alias for `Invoke-WebRequest`. Use either `curl.exe` (actual curl) **or** PowerShell cmdlets:
+> ```powershell
+> $body = '[{"source":"Fed","text":"Powell hints at uncertainty"}]'
+> Invoke-WebRequest -Method POST -Uri "http://127.0.0.1:8000/api/decide" `
+>   -ContentType "application/json" -Body $body -UseBasicParsing
+> ```
 
 ---
 
@@ -97,18 +143,18 @@ verb = 1
 [[anchors]]
 id = "djia_core_names"
 category = "hard"
-pattern = "(?i)\b(djia|dow jones|the dow)\b"
+pattern = "(?i)\\b(djia|dow jones|the dow)\\b"
 
 [[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
-pattern = "(?i)\bpowell\b"
-near = { pattern = "(?i)\b(fed|fomc|rates?)\b", window = 6 }
+pattern = "(?i)\\bpowell\\b"
+near = { pattern = "(?i)\\b(fed|fomc|rates?)\\b", window = 6 }
 
 [[blockers]]
 id = "dji_drones"
-pattern = "(?i)\bdji\b"
-near = { pattern = "(?i)\b(drone|mavic|gimbal)\b", window = 4 }
+pattern = "(?i)\\bdji\\b"
+near = { pattern = "(?i)\\b(drone|mavic|gimbal)\\b", window = 4 }
 
 [[combos.pass_any]]
 need = ["macro","hard"]
@@ -121,30 +167,6 @@ need = ["macro","hard"]
 | `RELEVANCE_THRESHOLD`    | `0.30`                  | Cutoff in `[0.0,1.0]`; below → neutralize       |
 | `RELEVANCE_HOT_RELOAD=1` | off                     | Hot reload config in dev mode                   |
 | `RELEVANCE_DEV_LOG=1`    | off                     | Dev logs with anonymized IDs                    |
-
-### Example
-```bash
-curl -s -X POST http://localhost:8000/decide   -H "Content-Type: application/json"   -d '[{"source":"Reuters","text":"ISM manufacturing dips below 50; the Dow slips."}]'
-```
-Response (example):
-```json
-{
-  "decision": "SELL",
-  "confidence": 0.68,
-  "reasons": [
-    "macro+hard combo matched",
-    "Relevance gate passed with score 0.47"
-  ]
-}
-```
-
-If irrelevant (e.g., DJI drones):
-```json
-{
-  "decision": "NEUTRAL",
-  "reasons": ["neutralized: below relevance threshold"]
-}
-```
 
 ---
 
@@ -185,8 +207,8 @@ Environment variables:
 
 ### Response format
 Headers:
-- `X-AI-Used: yes|no`
-- `X-AI-Reason: <short sanitized reason>`
+- `X-AI-Used: 1|0` *(sometimes `yes|no` depending on build; this project uses `1|0`)*
+- `X-AI-Reason: <short sanitized reason>` *(present only if AI contributed)*
 
 JSON field `ai`:
 ```json
@@ -200,39 +222,53 @@ JSON field `ai`:
 
 ### Examples
 
-1. **Borderline case → AI call**
+#### Borderline case → AI call
 ```bash
-curl -i -X POST http://localhost:8000/decide   -H "Content-Type: application/json"   -d '[{"source":"Fed","text":"Powell hints at uncertainty"}]'
+curl -i -X POST http://localhost:8000/api/decide \
+  -H "Content-Type: application/json" \
+  -d '[{"source":"Fed","text":"Powell hints at uncertainty"}]'
+```
+Response headers (example):
+```
+X-AI-Used: 1
+X-AI-Reason: borderline clarified by AI
+```
+Response JSON includes:
+```json
+"ai": { "used": true, "reason": "borderline clarified by AI", "cache_hit": false, "limited": false }
+```
+
+#### Cache hit
+Send the **same** request again. The response JSON shows:
+```json
+"ai": { "used": true, "cache_hit": true }
+```
+
+#### Disabled AI
+```bash
+export AI_ENABLED=0
+curl -i -X POST http://localhost:8000/api/decide \
+  -H "Content-Type: application/json" \
+  -d '[{"source":"Fed","text":"Powell says the Fed may cut rates; Dow Jones futures slip"}]'
 ```
 Response headers:
 ```
-X-AI-Used: yes
-X-AI-Reason: borderline, clarified by AI
+X-AI-Used: 0
 ```
-JSON:
+Response JSON:
 ```json
-{
-  "decision": "HOLD",
-  "confidence": 0.51,
-  "reasons": ["borderline sentiment", "AI: borderline, clarified by AI"],
-  "ai": { "used": true, "reason": "borderline, clarified by AI", "cache_hit": false, "limited": false }
-}
+"ai": { "used": false, "limited": false }
 ```
 
-2. **Cache hit**
-```
-ai.cache_hit = true
-```
-
-3. **Disabled AI**
-```
-ai.used = false
-```
-
-### Troubleshooting
-- `ai.cache_hit=true` → response reused from cache.  
-- `ai.limited=true` → daily limit exceeded; falls back to lexicon rules.  
-- If `enabled=false`, AI is completely bypassed.  
+> **Windows / PowerShell equivalents:**
+> ```powershell
+> $body = '[{"source":"Fed","text":"Powell hints at uncertainty"}]'
+> Invoke-WebRequest -Method POST -Uri "http://127.0.0.1:8000/api/decide" `
+>   -ContentType "application/json" -Body $body -UseBasicParsing | % Headers
+> Invoke-RestMethod  -Method POST -Uri "http://127.0.0.1:8000/api/decide" `
+>   -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 6
+> ```
+> If you hit `400 Bad Request` with `curl` in PowerShell, prefer `Invoke-WebRequest`/`Invoke-RestMethod` or use `curl.exe --data-binary`.
 
 ---
 

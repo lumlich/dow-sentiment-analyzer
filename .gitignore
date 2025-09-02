@@ -3,9 +3,7 @@
 **/*.rs.bk
 
 # Cargo
-# For apps we keep Cargo.lock tracked (do NOT ignore).
-# If you ever publish this as a library, you could ignore it:
-# Cargo.lock
+# Keep Cargo.lock tracked (do NOT ignore).
 
 # OS
 .DS_Store
@@ -21,3 +19,31 @@ Thumbs.db
 
 # Shuttle
 # Keep .shuttle/ tracked (contains config), do NOT ignore it.
+Secrets*.toml
+
+# Environment files
+.env
+.env.*
+
+# AI cache
+cache/ai/
+cache/ai/*
+!cache/.gitkeep
+
+# Frontend (Vite/Node)
+ui/node_modules/
+ui/dist/
+
+# Node logs (if any)
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files
+.env
+.env.*
+
+# AI cache
+cache/ai/
+cache/ai/*

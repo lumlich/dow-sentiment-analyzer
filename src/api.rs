@@ -164,6 +164,24 @@ struct AnalyzeOut {
     contributors: Vec<String>,
 }
 
+// ---- NEW: AI response metadata for /decide ----
+
+#[derive(serde::Serialize, Default)]
+struct ApiAiInfo {
+    used: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    cache_hit: bool,
+    limited: bool,
+}
+
+#[derive(serde::Serialize)]
+struct DecideWithAi {
+    #[serde(flatten)]
+    inner: crate::decision::Decision,
+    ai: ApiAiInfo,
+}
+
 // ----------------------------------------------------------------
 
 async fn analyze(Json(body): Json<AnalyzeReq>) -> Json<AnalyzeOut> {
@@ -289,7 +307,6 @@ async fn ai_analyze_safely(
 
 #[axum::debug_handler]
 async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
-
     // -------- 1) FÁZE BEZ await: vše se state v samostatném scope --------
     let (scored, neutralized, total, ai_corpus_opt, now) = {
         let state = app_state();
@@ -384,13 +401,15 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         (scored, neutralized, total, ai_corpus_opt, now)
     }; // <- zde padá &state a vše s ním spojené, před awaitem!
 
-    // -------- 2) PŘED await: rychlý cache-read a denní limit (bez držení locků přes await) --------
+    // -------- 2) PŘED await: cache/limit flags (bez držení locků přes await) --------
     let (ai_disabled, limit_opt) = (
         std::env::var("AI_ENABLED").ok().map(|v| v == "0").unwrap_or(false),
         std::env::var("AI_DAILY_LIMIT").ok().and_then(|s| s.parse::<usize>().ok()),
     );
 
     let mut ai_reason: Option<String> = None;
+    let mut ai_cache_hit = false;
+    let mut ai_limited = false;
     let mut should_call_ai = false;
     let cache_key_opt = ai_corpus_opt.as_ref().map(|c| hash_bytes(c.as_bytes()));
 
@@ -402,6 +421,7 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         } {
             if !cached.is_empty() {
                 ai_reason = Some(cached);
+                ai_cache_hit = true;
             }
         } else {
             // 2b) zkontrolovat denní limit
@@ -416,7 +436,11 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
                     false
                 }
             };
-            should_call_ai = !over_limit;
+            if over_limit {
+                ai_limited = true;
+            } else {
+                should_call_ai = true;
+            }
         }
     }
 
@@ -500,7 +524,30 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
 
     state.history.push(&decision);
 
-    let mut resp = axum::Json(decision).into_response();
+    // ---- Build AI meta + JSON body ----
+    let ai_meta = ApiAiInfo {
+        used: ai_reason.is_some(),
+        reason: ai_reason.clone(),
+        cache_hit: ai_cache_hit,
+        limited: ai_limited,
+    };
+
+    let body = DecideWithAi {
+        inner: decision,
+        ai: ai_meta,
+    };
+
+    // concise INFO log
+    info!(
+        ai_used = %body.ai.used,
+        cache_hit = %body.ai.cache_hit,
+        limited = %body.ai.limited,
+        reason_len = %body.ai.reason.as_ref().map(|s| s.len()).unwrap_or(0),
+        "decision_done"
+    );
+
+    // ---- Headers + response ----
+    let mut resp = axum::Json(body).into_response();
     resp.headers_mut().insert(
         "X-AI-Used",
         HeaderValue::from_static(if ai_reason.is_some() { "1" } else { "0" }),
@@ -514,7 +561,6 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
     }
     resp
 }
-
 
 fn current_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};

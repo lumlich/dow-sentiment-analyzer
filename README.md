@@ -15,6 +15,7 @@ It processes short texts (e.g., statements by Trump, the Fed, Yellen, Reuters, e
 - Confidence calibration with recent volume context (last 10 minutes).
 - Rolling metrics (48h average & count) and in-memory decision history.
 - Clean JSON API + debug endpoints.
+- **Optional AI integration with caching and daily call limits.**
 
 ---
 
@@ -148,69 +149,90 @@ If irrelevant (e.g., DJI drones):
 ---
 
 ## Phase 2 – Frontend UI
-
-The project now includes a frontend served together with the backend (via Shuttle).  
-The UI is designed as a single-page app that updates in real time.
-
-### 🖥️ Dev quickstart
-- `cd ui && npm install`
-- `npm run dev` (served on Vite dev server, proxied to backend on port 8000)
-- For Shuttle local backend: `cargo shuttle run`
-- Open http://localhost:5173
-
-### 🔌 API (dev)
-- Frontend fetches from `/analyze` → proxied to backend `/decide`.
-- Data format:
-  ```json
-  {
-    "decision": "BUY | SELL | HOLD",
-    "confidence": 0.83,
-    "reasons": ["Trump statement...", "Fed speech...", "Market data..."],
-    "contributors": ["Trump", "Fed"]
-  }
-  ```
-
-### 📊 Panels
-- **Verdict panel** – shows BUY/SELL/HOLD, color-coded, flashes on change.
-- **Why panel** – top 3 reasons.
-- **Evidence panel** – expandable accordion, shows detailed evidence (text + source + sentiment + timestamp).
-- **Sentiment trend** – mini sparkline chart (last X minutes).
-
-### ⚠️ Error handling
-- If fetch fails, UI shows a fallback message and retries on next poll.
-- Polling interval: 15s.
-
-### 🏗️ Build (prod)
-- `npm run build` → generates static assets in `/dist`
-- Served by Shuttle as part of the Rust project.
-
-### ✅ QA checklist
-- [x] Verdict panel changes color and plays alert sound on decision change.
-- [x] Evidence panel expands/collapses and shows reasons.
-- [x] Sentiment trend updates.
-- [x] UI loads successfully on Shuttle.
+[... unchanged ...]
 
 ---
 
 ## Phase 3 – Contextual rules (AI-ready design)
+[... unchanged ...]
 
-**Goal:** Reduce false positives, improve explainability, prepare logic for later AI integration.
+---
 
-### Implemented
-- **NER + Regex/Keyword Config** – enriches reasons from JSON configs in `./config/`.
-- **Reranking** – keeps the latest relevant statement per source, decays earlier near-duplicates.
-- **Antispam** – filters near-identical statements in a sliding time window.
-- **Calibration** – confidence is dynamically influenced by `weights.json` (hot-reload).
+## Phase 4 – AI Integration (optional)
 
-### Tests
-Synthetic integration suite lives in `tests/f3_synthetic.rs`.  
-Run it with:
-```bash
-cargo test f3_ -- --nocapture
+### Overview
+- AI is only called **sometimes**, on borderline or ambiguous decisions.  
+- Responses include both **headers** and **JSON fields** indicating AI usage.  
+- AI calls are cached per input hash in `cache/ai/` and limited daily.
+
+### Config
+File: `config/ai.json`
+```json
+{
+  "enabled": true,
+  "provider": "openai",
+  "daily_limit": 50
+}
 ```
-All five tests (NER, Rerank, Antispam, Calibration, Rules) currently pass ✅.
 
-**Milestone:** Contextual rules are fully implemented, tested, and documented.
+Environment variables:
+| Variable              | Default | Meaning                                |
+|-----------------------|---------|----------------------------------------|
+| `OPENAI_API_KEY`      | none    | API key for provider (e.g. OpenAI)     |
+| `AI_SOURCES`          | all     | Sources allowed for AI use             |
+| `AI_ONLY_TOP_SOURCES` | true    | Restrict AI to top-weighted sources    |
+| `AI_SCORE_BAND`       | 0.08    | Only borderline decisions trigger AI   |
+
+### Response format
+Headers:
+- `X-AI-Used: yes|no`
+- `X-AI-Reason: <short sanitized reason>`
+
+JSON field `ai`:
+```json
+"ai": {
+  "used": true,
+  "reason": "AI short summary",
+  "cache_hit": false,
+  "limited": false
+}
+```
+
+### Examples
+
+1. **Borderline case → AI call**
+```bash
+curl -i -X POST http://localhost:8000/decide   -H "Content-Type: application/json"   -d '[{"source":"Fed","text":"Powell hints at uncertainty"}]'
+```
+Response headers:
+```
+X-AI-Used: yes
+X-AI-Reason: borderline, clarified by AI
+```
+JSON:
+```json
+{
+  "decision": "HOLD",
+  "confidence": 0.51,
+  "reasons": ["borderline sentiment", "AI: borderline, clarified by AI"],
+  "ai": { "used": true, "reason": "borderline, clarified by AI", "cache_hit": false, "limited": false }
+}
+```
+
+2. **Cache hit**
+```
+ai.cache_hit = true
+```
+
+3. **Disabled AI**
+```
+ai.used = false
+```
+
+### Troubleshooting
+- `ai.cache_hit=true` → response reused from cache.  
+- `ai.limited=true` → daily limit exceeded; falls back to lexicon rules.  
+- If `enabled=false`, AI is completely bypassed.  
 
 ---
 

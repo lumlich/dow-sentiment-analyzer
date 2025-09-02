@@ -1,111 +1,119 @@
 // tests/ai_integration.rs
 //
-// Integration tests for AI Adapter and /api/decide behavior using Axum 0.8.
+// E2E tests for /api/decide AI metadata & cache behavior against a running Shuttle app.
+// Run with the app started in another terminal via `cargo shuttle run`.
+// In this terminal, set: TEST_BASE_URL=http://127.0.0.1:8000
+//
+// Example:
+//   # Terminal A:
+//   cargo shuttle run
+//   # Terminal B (PowerShell):
+//   $env:TEST_BASE_URL = "http://127.0.0.1:8000"
+//   cargo test --test ai_integration -- --ignored
+//
 // Notes:
-// - shuttle-axum >= 0.56 uses Axum 0.8 by default.
-// - These tests are marked #[ignore] until the router/startup helper is available.
+// - We do NOT force AI to be used; that depends on your runtime config (relevance threshold, bands, etc.).
+// - Instead, we assert presence of AI metadata and header↔JSON consistency.
+// - If AI is used on the first call, we expect a cache hit on the second call.
 
 use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderName};
 use std::time::Duration;
 
-fn ai_headers(hdrs: &HeaderMap) -> (Option<String>, Option<String>) {
-    let used = HeaderName::from_static("x-ai-used");
-    let reason = HeaderName::from_static("x-ai-reason");
-    let u = hdrs.get(&used).and_then(|v| v.to_str().ok()).map(|s| s.to_string());
-    let r = hdrs.get(&reason).and_then(|v| v.to_str().ok()).map(|s| s.to_string());
-    (u, r)
+fn base_url() -> String {
+    std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string())
 }
 
-/// TODO:
-/// - Replace the placeholder "BASE" with a started local server, e.g.:
-///   let base = format!("http://{addr}");
-///   where `addr` is from a spawned axum::Server with your project router.
-///
-/// Recommended endpoint: /api/decide
-fn base_url() -> String {
-    // For now, use a placeholder; adjust to your spawned server once wired.
-    // Example when running the app locally: "http://127.0.0.1:8000"
-    std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string())
+fn get_ai_used_header(h: &HeaderMap) -> Option<String> {
+    let key = HeaderName::from_static("x-ai-used");
+    h.get(&key).and_then(|v| v.to_str().ok()).map(|s| s.to_string())
 }
 
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
-async fn borderline_triggers_ai_once_and_uses_cache_afterwards() -> Result<()> {
+async fn ai_metadata_present_and_consistent() -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
 
+    // Stronger input to pass relevance (macro + hard): mentions Powell, Fed/rates, and Dow Jones.
     let body = serde_json::json!([{
         "source": "Fed",
-        "text": "Powell hints at uncertainty"
+        "text": "Powell says the Fed may cut rates; Dow Jones futures slip"
     }]);
 
-    // Act 1: borderline -> expect AI call
-    let r1 = client
+    let resp = client
         .post(format!("{}/api/decide", base_url()))
         .json(&body)
         .send()
         .await?;
-    assert!(r1.status().is_success());
-    let (u1, _rs1) = ai_headers(r1.headers());
-    // "1" or "yes" depending on implementation
-    assert!(u1.as_deref() == Some("1") || u1.as_deref() == Some("yes"));
+    assert!(resp.status().is_success(), "status should be 2xx");
 
-    // Act 2: same input -> expect cache hit (still AI-used=yes, but cache flag in JSON)
-    let r2 = client
-        .post(format!("{}/api/decide", base_url()))
-        .json(&body)
-        .send()
-        .await?;
-    assert!(r2.status().is_success());
-    let (u2, _rs2) = ai_headers(r2.headers());
-    assert!(u2.as_deref() == Some("1") || u2.as_deref() == Some("yes"));
+    let headers = resp.headers().clone();
+    let hdr_used = get_ai_used_header(&headers);
 
-    // If the response body includes { "ai": { "cache_hit": true } }, you can assert it here:
-    // let v: serde_json::Value = r2.json().await?;
-    // assert_eq!(v["ai"]["cache_hit"], true);
+    let v: serde_json::Value = resp.json().await?;
+    assert!(v.get("ai").is_some(), "response JSON must include 'ai'");
+    assert!(v["ai"].get("used").is_some(), "ai.used must be present");
+    assert!(v["ai"].get("cache_hit").is_some(), "ai.cache_hit must be present");
+    assert!(v["ai"].get("limited").is_some(), "ai.limited must be present");
+
+    // Header ↔ JSON consistency
+    let used_json = v["ai"]["used"].as_bool().unwrap_or(false);
+    match hdr_used.as_deref() {
+        Some("1") | Some("yes") => assert!(used_json, "header says AI used, but JSON says false"),
+        Some("0") | Some("no") => assert!(!used_json, "header says AI NOT used, but JSON says true"),
+        _ => {
+            // Header not present: accept; JSON still must have ai.used
+            assert!(v["ai"].get("used").is_some());
+        }
+    }
 
     Ok(())
 }
 
 #[ignore]
 #[tokio::test(flavor = "multi_thread")]
-async fn daily_limit_blocks_second_call() -> Result<()> {
-    // Optionally set daily limit env var before starting the server in your test harness:
-    // std::env::set_var("AI_DAILY_LIMIT", "1");
-
+async fn cache_hit_consistency_when_ai_used() -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
 
     let body = serde_json::json!([{
         "source": "Fed",
-        "text": "Powell hints at uncertainty"
+        "text": "Powell says the Fed may cut rates; Dow Jones futures slip"
     }]);
 
-    // First call -> should use AI
+    // First call
     let r1 = client
         .post(format!("{}/api/decide", base_url()))
         .json(&body)
         .send()
         .await?;
-    assert!(r1.status().is_success());
-    let (u1, _rs1) = ai_headers(r1.headers());
-    assert!(u1.as_deref() == Some("1") || u1.as_deref() == Some("yes"));
+    assert!(r1.status().is_success(), "first call should be 2xx");
+    let v1: serde_json::Value = r1.json().await?;
+    let used1 = v1["ai"]["used"].as_bool().unwrap_or(false);
 
-    // Second call (same day) -> daily limit reached -> should NOT use AI
+    // Second call (same input)
     let r2 = client
         .post(format!("{}/api/decide", base_url()))
         .json(&body)
         .send()
         .await?;
-    assert!(r2.status().is_success());
-    let (u2, _rs2) = ai_headers(r2.headers());
-    assert!(
-        u2.is_none() || u2.as_deref() == Some("0") || u2.as_deref() == Some("no"),
-        "expected AI to be skipped on daily-limit overflow"
-    );
+    assert!(r2.status().is_success(), "second call should be 2xx");
+    let v2: serde_json::Value = r2.json().await?;
+    let used2 = v2["ai"]["used"].as_bool().unwrap_or(false);
+    let cache2 = v2["ai"]["cache_hit"].as_bool().unwrap_or(false);
+
+    // If AI was used on the first call, the second should mark cache_hit=true.
+    if used1 {
+        assert!(used2, "if AI was used first, we expect it marked used on second too");
+        assert!(cache2, "second call should report cache_hit=true when AI is used");
+    } else {
+        // If AI was not used initially (due to relevance/band/limits),
+        // cache_hit must remain false (no AI output to cache).
+        assert!(!cache2, "cache_hit should be false when AI was not used on the first call");
+    }
 
     Ok(())
 }

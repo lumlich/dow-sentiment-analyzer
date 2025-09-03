@@ -2,17 +2,17 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, RwLock, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
-use serde_json::Value;
 use axum::{
     extract::Query,
-    http::{HeaderValue, Method, header},
+    http::{header, HeaderValue, Method},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
-use tower_http::cors::{CorsLayer, Any};
+use serde_json::Value;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::disruption::{self, evaluate_with_weights, DisruptionInput};
 use crate::engine;
@@ -45,7 +45,7 @@ fn app_state() -> &'static ApiState {
 /// Denní počitadlo AI volání (sdílené mezi požadavky v rámci procesu).
 #[derive(Clone, Debug)]
 struct DailyAiCounter {
-    day: u64,  // číslo dne (unix_days = unix_secs / 86400)
+    day: u64, // číslo dne (unix_days = unix_secs / 86400)
     used: usize,
 }
 
@@ -66,11 +66,16 @@ struct ApiState {
 }
 
 fn debug_enabled() -> bool {
-    std::env::var("SHUTTLE_ENV").map(|v| v == "local").unwrap_or(false)
+    std::env::var("SHUTTLE_ENV")
+        .map(|v| v == "local")
+        .unwrap_or(false)
 }
 
 fn debug_routes_enabled() -> bool {
-    debug_enabled() || std::env::var("DEBUG_ROUTES").map(|v| v == "1").unwrap_or(false)
+    debug_enabled()
+        || std::env::var("DEBUG_ROUTES")
+            .map(|v| v == "1")
+            .unwrap_or(false)
 }
 
 // Return current UNIX time as string (for UI "time" field)
@@ -114,8 +119,8 @@ pub fn router(state_from_main: RelevanceAppState) -> Router<()> {
 
     // --- CORS whitelist řízený env proměnnou ---
     // ALLOWED_ORIGINS="http://localhost:5173,https://app.example.com"
-    let allowed = std::env::var("ALLOWED_ORIGINS")
-        .unwrap_or_else(|_| "http://localhost:5173".to_string());
+    let allowed =
+        std::env::var("ALLOWED_ORIGINS").unwrap_or_else(|_| "http://localhost:5173".to_string());
 
     let origins: Vec<HeaderValue> = allowed
         .split(',')
@@ -154,7 +159,10 @@ pub fn router(state_from_main: RelevanceAppState) -> Router<()> {
             .route("/debug/history", get(debug_history))
             .route("/debug/last-decision", get(debug_last_decision))
             .route("/debug/source-weight", get(debug_source_weight))
-            .route("/admin/reload-source-weights", get(admin_reload_source_weights));
+            .route(
+                "/admin/reload-source-weights",
+                get(admin_reload_source_weights),
+            );
     }
 
     r.layer(cors)
@@ -225,7 +233,13 @@ async fn analyze(Json(body): Json<AnalyzeReq>) -> Json<AnalyzeOut> {
     let (score, _tokens) = state.analyzer.score_text(&body.text);
     state.rolling.record(score, None);
 
-    let verdict = if score > 0 { "BUY" } else if score < 0 { "SELL" } else { "HOLD" };
+    let verdict = if score > 0 {
+        "BUY"
+    } else if score < 0 {
+        "SELL"
+    } else {
+        "HOLD"
+    };
 
     let ts = now_string();
 
@@ -315,13 +329,35 @@ fn ai_reason_counts_as_used(reason: &str) -> bool {
     }
     let r = reason.to_ascii_lowercase();
     let blockers = [
-        "limit", "exceed", "exceeded", "disabled", "band",
-        "quota", "rate", "limited", "throttle", "throttled",
-        "exhaust", "exhausted", "reach", "reached",
-        "cap", "capped", "cooldown", "cool down",
-        "suspend", "suspended", "turned off", "off",
-        "quota exceeded", "daily limit", "day limit", "over quota",
-        "temporarily unavailable", "not available", "unavailable",
+        "limit",
+        "exceed",
+        "exceeded",
+        "disabled",
+        "band",
+        "quota",
+        "rate",
+        "limited",
+        "throttle",
+        "throttled",
+        "exhaust",
+        "exhausted",
+        "reach",
+        "reached",
+        "cap",
+        "capped",
+        "cooldown",
+        "cool down",
+        "suspend",
+        "suspended",
+        "turned off",
+        "off",
+        "quota exceeded",
+        "daily limit",
+        "day limit",
+        "over quota",
+        "temporarily unavailable",
+        "not available",
+        "unavailable",
     ];
     !blockers.iter().any(|kw| r.contains(kw))
 }
@@ -351,7 +387,9 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
                         .collect(),
                     Value::Object(map) => {
                         if let Some(items) = map.get("inputs").or_else(|| map.get("items")) {
-                            if let Ok(vec_items) = serde_json::from_value::<Vec<DecideItem>>(items.clone()) {
+                            if let Ok(vec_items) =
+                                serde_json::from_value::<Vec<DecideItem>>(items.clone())
+                            {
                                 return vec_items;
                             }
                         }
@@ -382,7 +420,11 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
             }
 
             if dev_logging_enabled() {
-                let event = if rel.score > 0.0 { "api_pass" } else { "api_neutralized" };
+                let event = if rel.score > 0.0 {
+                    "api_pass"
+                } else {
+                    "api_neutralized"
+                };
                 info!(
                     target: "relevance",
                     event,
@@ -413,7 +455,10 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
                 evaluate_with_weights(&di, &guard)
             };
 
-            let bi = BatchItem { source: it.source, text: it.text };
+            let bi = BatchItem {
+                source: it.source,
+                text: it.text,
+            };
             scored.push((bi, gated_score, res));
         }
 
@@ -421,7 +466,9 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         let ai_corpus_opt = if !ai_gated_texts.is_empty() {
             let mut s = String::new();
             for t in ai_gated_texts.iter().take(8) {
-                if !s.is_empty() { s.push_str("\n\n"); }
+                if !s.is_empty() {
+                    s.push_str("\n\n");
+                }
                 s.push_str(t);
             }
             Some(s)
@@ -434,8 +481,13 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
 
     // -------- 2) PŘED await: cache/limit flags (bez držení locků přes await) --------
     let (ai_disabled, limit_opt) = (
-        std::env::var("AI_ENABLED").ok().map(|v| v == "0").unwrap_or(false),
-        std::env::var("AI_DAILY_LIMIT").ok().and_then(|s| s.parse::<usize>().ok()),
+        std::env::var("AI_ENABLED")
+            .ok()
+            .map(|v| v == "0")
+            .unwrap_or(false),
+        std::env::var("AI_DAILY_LIMIT")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok()),
     );
 
     let mut ai_reason: Option<String> = None;
@@ -448,7 +500,10 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         // 2a) read-cache (krátký guard, nepřenáší se přes await)
         if let Some(cached) = {
             let st = app_state();
-            st.ai_cache.read().ok().and_then(|g| g.get(&cache_key).cloned())
+            st.ai_cache
+                .read()
+                .ok()
+                .and_then(|g| g.get(&cache_key).cloned())
         } {
             if !cached.is_empty() {
                 ai_reason = Some(cached);
@@ -461,7 +516,10 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
                 let st = app_state();
                 if let Some(lim) = limit_opt {
                     let mut g = st.ai_daily.write().expect("ai_daily poisoned");
-                    if g.day != today { g.day = today; g.used = 0; }
+                    if g.day != today {
+                        g.day = today;
+                        g.used = 0;
+                    }
                     g.used >= lim
                 } else {
                     false
@@ -495,7 +553,10 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
                         let today = current_day(current_unix());
                         let st = app_state();
                         let mut g = st.ai_daily.write().expect("ai_daily poisoned");
-                        if g.day != today { g.day = today; g.used = 0; }
+                        if g.day != today {
+                            g.day = today;
+                            g.used = 0;
+                        }
                         g.used = g.used.saturating_add(1);
                     }
                 }
@@ -587,7 +648,8 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         if let Ok(hv) = HeaderValue::from_str(&r) {
             resp.headers_mut().insert("X-AI-Reason", hv);
         } else {
-            resp.headers_mut().insert("X-AI-Reason", HeaderValue::from_static("sanitized"));
+            resp.headers_mut()
+                .insert("X-AI-Reason", HeaderValue::from_static("sanitized"));
         }
     }
     resp

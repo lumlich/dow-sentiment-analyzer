@@ -59,24 +59,18 @@ pong
 
 ### POST /api/analyze
 ```bash
-curl -s -X POST http://localhost:8000/api/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"text":"Fed signals a cautious path to rate cuts this year.","source":"Fed"}'
+curl -s -X POST http://localhost:8000/api/analyze   -H "Content-Type: application/json"   -d '{"text":"Fed signals a cautious path to rate cuts this year.","source":"Fed"}'
 ```
 
 ### POST /api/batch
 ```bash
-curl -s -X POST http://localhost:8000/api/batch \
-  -H "Content-Type: application/json" \
-  -d '[{"id":"a1","text":"Trump says Dow will soar.","source":"Trump"},
+curl -s -X POST http://localhost:8000/api/batch   -H "Content-Type: application/json"   -d '[{"id":"a1","text":"Trump says Dow will soar.","source":"Trump"},
        {"id":"b2","text":"Reuters: unexpected slowdown in manufacturing.","source":"Reuters"}]'
 ```
 
 ### POST /api/decide
 ```bash
-curl -s -X POST http://localhost:8000/api/decide \
-  -H "Content-Type: application/json" \
-  -d '[{"source":"Reuters","text":"ISM manufacturing dips below 50; the Dow slips."}]'
+curl -s -X POST http://localhost:8000/api/decide   -H "Content-Type: application/json"   -d '[{"source":"Reuters","text":"ISM manufacturing dips below 50; the Dow slips."}]'
 ```
 Response (example):
 ```json
@@ -224,9 +218,7 @@ JSON field `ai`:
 
 #### Borderline case → AI call
 ```bash
-curl -i -X POST http://localhost:8000/api/decide \
-  -H "Content-Type: application/json" \
-  -d '[{"source":"Fed","text":"Powell hints at uncertainty"}]'
+curl -i -X POST http://localhost:8000/api/decide   -H "Content-Type: application/json"   -d '[{"source":"Fed","text":"Powell hints at uncertainty"}]'
 ```
 Response headers (example):
 ```
@@ -247,9 +239,7 @@ Send the **same** request again. The response JSON shows:
 #### Disabled AI
 ```bash
 export AI_ENABLED=0
-curl -i -X POST http://localhost:8000/api/decide \
-  -H "Content-Type: application/json" \
-  -d '[{"source":"Fed","text":"Powell says the Fed may cut rates; Dow Jones futures slip"}]'
+curl -i -X POST http://localhost:8000/api/decide   -H "Content-Type: application/json"   -d '[{"source":"Fed","text":"Powell says the Fed may cut rates; Dow Jones futures slip"}]'
 ```
 Response headers:
 ```
@@ -269,6 +259,60 @@ Response JSON:
 >   -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 6
 > ```
 > If you hit `400 Bad Request` with `curl` in PowerShell, prefer `Invoke-WebRequest`/`Invoke-RestMethod` or use `curl.exe --data-binary`.
+
+---
+
+## AI integration tests (mock)
+
+Run the local server and tests in mock mode:
+
+```powershell
+$env:AI_TEST_MODE = "mock"
+$env:SHUTTLE_ENV = "local"
+cargo shuttle run
+```
+
+In another terminal:
+
+```powershell
+$env:AI_TEST_MODE = "mock"
+cargo test --test ai_integration -- --ignored --nocapture
+```
+
+> Full suite including ignored: `cargo test -- --include-ignored`
+
+---
+
+## Real AI calls locally (no commits, env-only)
+
+```powershell
+Remove-Item Env:AI_TEST_MODE -ErrorAction SilentlyContinue
+$env:OPENAI_API_KEY = "XXXXXXXXXX"
+$env:SHUTTLE_ENV   = "local"
+cargo shuttle run
+```
+
+Verify headers:
+
+```powershell
+curl http://127.0.0.1:8000/api/decide `
+  -Method POST `
+  -Body '{ "text": "Fed hints at cuts; labor market cools" }' `
+  -ContentType "application/json" -i
+```
+
+Cleanup:
+
+```powershell
+Remove-Item Env:OPENAI_API_KEY
+```
+
+---
+
+## CI
+
+- GH Actions runs `fmt`, `clippy -D warnings`, and fast tests (`cargo test`) on PRs and `main`.
+- AI integration tests are excluded from CI by default (they require a running local server).
 
 ---
 

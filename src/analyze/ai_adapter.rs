@@ -225,7 +225,7 @@ impl Provider for OpenAiProvider {
             let body: Resp = resp.json().await.ok()?;
             let content = body
                 .choices
-                .get(0)
+                .first()
                 .map(|c| c.message.content.as_str())
                 .unwrap_or("");
             let cleaned = sanitize_reason(content);

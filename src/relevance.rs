@@ -12,6 +12,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime};
 use tracing::info;
+
 // --- AI gating env names ---
 pub const ENV_AI_SOURCES: &str = "AI_SOURCES"; // comma-separated allowlist
 pub const ENV_AI_ONLY_TOP: &str = "AI_ONLY_TOP_SOURCES"; // "1"=restrict to top sources (default 1)
@@ -62,9 +63,7 @@ pub fn ai_client_from_env() -> SharedAi {
 
     // Best-effort build from config/ai.json (interně si ji načte).
     // `build_ai_client()` už vrací správně mock/real/disabled dle configu a AI_TEST_MODE.
-    let client = build_ai_client();
-
-    client
+    build_ai_client()
 }
 
 // Dev logging gate: RELEVANCE_DEV_LOG=1 AND dev env (debug or SHUTTLE_ENV in {local,development,dev})

@@ -26,7 +26,9 @@ fn base_url() -> String {
 
 fn get_ai_used_header(h: &HeaderMap) -> Option<String> {
     let key = HeaderName::from_static("x-ai-used");
-    h.get(&key).and_then(|v| v.to_str().ok()).map(|s| s.to_string())
+    h.get(&key)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
 }
 
 #[ignore]
@@ -55,14 +57,22 @@ async fn ai_metadata_present_and_consistent() -> Result<()> {
     let v: serde_json::Value = resp.json().await?;
     assert!(v.get("ai").is_some(), "response JSON must include 'ai'");
     assert!(v["ai"].get("used").is_some(), "ai.used must be present");
-    assert!(v["ai"].get("cache_hit").is_some(), "ai.cache_hit must be present");
-    assert!(v["ai"].get("limited").is_some(), "ai.limited must be present");
+    assert!(
+        v["ai"].get("cache_hit").is_some(),
+        "ai.cache_hit must be present"
+    );
+    assert!(
+        v["ai"].get("limited").is_some(),
+        "ai.limited must be present"
+    );
 
     // Header ↔ JSON consistency
     let used_json = v["ai"]["used"].as_bool().unwrap_or(false);
     match hdr_used.as_deref() {
         Some("1") | Some("yes") => assert!(used_json, "header says AI used, but JSON says false"),
-        Some("0") | Some("no") => assert!(!used_json, "header says AI NOT used, but JSON says true"),
+        Some("0") | Some("no") => {
+            assert!(!used_json, "header says AI NOT used, but JSON says true")
+        }
         _ => {
             // Header not present: accept; JSON still must have ai.used
             assert!(v["ai"].get("used").is_some());
@@ -107,12 +117,21 @@ async fn cache_hit_consistency_when_ai_used() -> Result<()> {
 
     // If AI was used on the first call, the second should mark cache_hit=true.
     if used1 {
-        assert!(used2, "if AI was used first, we expect it marked used on second too");
-        assert!(cache2, "second call should report cache_hit=true when AI is used");
+        assert!(
+            used2,
+            "if AI was used first, we expect it marked used on second too"
+        );
+        assert!(
+            cache2,
+            "second call should report cache_hit=true when AI is used"
+        );
     } else {
         // If AI was not used initially (due to relevance/band/limits),
         // cache_hit must remain false (no AI output to cache).
-        assert!(!cache2, "cache_hit should be false when AI was not used on the first call");
+        assert!(
+            !cache2,
+            "cache_hit should be false when AI was not used on the first call"
+        );
     }
 
     Ok(())

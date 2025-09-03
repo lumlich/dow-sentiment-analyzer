@@ -1,21 +1,17 @@
 //! MVP Sentiment Service — Binary Entrypoint
 //! Boots the Axum HTTP server, wiring routes, shared state, and middleware.
 
-use axum::{
-    response::IntoResponse,
-    routing::get,
-    Router,
-};
+use axum::{response::IntoResponse, routing::get, Router};
 use shuttle_axum::ShuttleAxum;
 use std::path::PathBuf;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+use dow_sentiment_analyzer::api;
 use dow_sentiment_analyzer::relevance::{
     start_hot_reload_thread, AppState, RelevanceEngine, RelevanceHandle,
     DEFAULT_RELEVANCE_CONFIG_PATH, ENV_RELEVANCE_CONFIG_PATH,
 };
-use dow_sentiment_analyzer::api;
 
 fn enable_dev_tracing() {
     let dev_flag = std::env::var("RELEVANCE_DEV_LOG")

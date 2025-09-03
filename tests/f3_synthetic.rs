@@ -1,7 +1,7 @@
 // tests/f3_synthetic.rs
 // Synthetic integration tests for Phase 3 (NER, Rerank, Antispam, Calibration, Rules).
-// Tyto testy NEPOUŽÍVAJÍ process-wide CWD. NER čte config přes NER_CONFIG_DIR
-// nastavené na absolutní cestu do dočasného adresáře, takže jsou stabilní i v CI (paralelní běh).
+// Tyto testy se vyhýbají skutečnému ./config tak, že pro NER používají vlastní temp adresář
+// a nesahají na process-wide current working directory.
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -42,69 +42,59 @@ fn write_file(path: impl AsRef<Path>, content: &str) {
     f.sync_all().unwrap();
 }
 
-/// Spustí blok s dočasným adresářem a po skončení uklidí.
-fn with_temp_dir<F: FnOnce(&Path)>(f: F) {
-    let tmp = tmp_dir();
-    fs::create_dir_all(&tmp).expect("mkdir tmp");
-    f(&tmp);
-    let _ = fs::remove_dir_all(&tmp);
-}
-
-/// Nastaví NER_CONFIG_DIR na absolutní `config/` v dočasném adresáři a po skončení smaže proměnnou.
-/// Vrací cestu k tomuto `config/`.
-fn with_temp_ner_config<F: FnOnce(&Path)>(f: F) {
-    with_temp_dir(|root| {
-        let config = root.join("config");
-        fs::create_dir_all(&config).expect("mkdir config");
-        // Nastav absolutní cestu – žádná závislost na CWD.
-        std::env::set_var("NER_CONFIG_DIR", &config);
-        f(&config);
-        std::env::remove_var("NER_CONFIG_DIR");
-    });
-}
-
 // --- NER ---
 
 #[test]
 fn f3_ner_extracts_from_temp_configs() {
-    with_temp_ner_config(|config_dir| {
-        // Připrav ./config/*.json (v absolutní cestě)
-        write_file(
-            config_dir.join("inflation.json"),
-            r#"{"patterns":[{"regex":"(?i)\\binflation\\b","keyword":"inflation"}]}"#,
-        );
-        write_file(
-            config_dir.join("rates.json"),
-            r#"{"patterns":[{"regex":"(?i)\\brates?\\b","keyword":"rates"}]}"#,
-        );
-        // geopolitics/earnings intentionally missing to test graceful skip
+    // Nepřepínáme CWD! Vytvoříme izolovaný adresář a předáme ho přes NER_CONFIG_DIR.
+    let tmp = tmp_dir();
+    let config_dir = tmp.join("config");
+    fs::create_dir_all(&config_dir).expect("mkdir tmp/config");
 
-        // Should pick up both categories when present
-        let text = "Inflation is rising and central bank raises rates.";
-        let reasons = extract_reasons_from_configs(text);
+    // Force analyzer to read configs from this absolute path (stabilizes CI / parallel tests)
+    let config_dir_abs = config_dir.canonicalize().unwrap_or(config_dir.clone());
+    std::env::set_var("NER_CONFIG_DIR", config_dir_abs.to_string_lossy().to_string());
 
-        // Expect category/keyword presence, tolerant to formatting/case
-        eprintln!("NER reasons: {:?}", reasons);
-        assert!(
-            reasons.iter().any(|r| {
-                r.eq_ignore_ascii_case("inflation: inflation")
-                    || r.to_lowercase().contains("inflation")
-            }),
-            "Expected an inflation reason, got: {:?}",
-            reasons
-        );
-        assert!(
-            reasons
-                .iter()
-                .any(|r| r.eq_ignore_ascii_case("rates: rates") || r.to_lowercase().contains("rates")),
-            "Expected a rates reason, got: {:?}",
-            reasons
-        );
+    // Prepare ./config/*.json inside our temp config dir
+    write_file(
+        config_dir_abs.join("inflation.json"),
+        r#"{"patterns":[{"regex":"(?i)\\binflation\\b","keyword":"inflation"}]}"#,
+    );
+    write_file(
+        config_dir_abs.join("rates.json"),
+        r#"{"patterns":[{"regex":"(?i)\\brates?\\b","keyword":"rates"}]}"#,
+    );
+    // geopolitics/earnings intentionally missing to test graceful skip
 
-        // Enrichment should keep existing reasons
-        let out = enrich_reasons(vec!["pipeline: base".into()], text);
-        assert!(out.iter().any(|r| r == "pipeline: base"));
-    });
+    // Should pick up both categories when present
+    let text = "Inflation is rising and central bank raises rates.";
+    let reasons = extract_reasons_from_configs(text);
+
+    // Expect category/keyword presence, tolerant to formatting/case
+    eprintln!("NER reasons: {:?}", reasons);
+    assert!(
+        reasons.iter().any(|r| {
+            r.eq_ignore_ascii_case("inflation: inflation")
+                || r.to_lowercase().contains("inflation")
+        }),
+        "Expected an inflation reason, got: {:?}",
+        reasons
+    );
+    assert!(
+        reasons.iter().any(|r| {
+            r.eq_ignore_ascii_case("rates: rates") || r.to_lowercase().contains("rates")
+        }),
+        "Expected a rates reason, got: {:?}",
+        reasons
+    );
+
+    // Enrichment should keep existing reasons
+    let out = enrich_reasons(vec!["pipeline: base".into()], text);
+    assert!(out.iter().any(|r| r == "pipeline: base"));
+
+    // Clean up env & temp dir
+    std::env::remove_var("NER_CONFIG_DIR");
+    let _ = fs::remove_dir_all(tmp);
 }
 
 // --- RERANK ---
@@ -191,47 +181,52 @@ fn f3_antispam_filters_near_duplicates_within_window() {
 #[test]
 fn f3_calibration_changes_base_confidence_via_weights() {
     // Create a temp weights.json and use HotReloadWeights::new(Some(path))
-    with_temp_dir(|tmp| {
-        let path = tmp.join("weights.json");
-        write_file(
-            &path,
-            r#"{"w_source":1.0,"w_strength":1.0,"w_recency":1.0}"#,
-        );
+    let tmp = tmp_dir();
+    let path = tmp.join("weights.json");
+    write_file(
+        &path,
+        r#"{"w_source":1.0,"w_strength":1.0,"w_recency":1.0}"#,
+    );
 
-        let hot = HotReloadWeights::new(Some(&path));
-        let w1 = hot.current();
+    let hot = HotReloadWeights::new(Some(&path));
+    let w1 = hot.current();
 
-        let inputs = ScoreInputs {
-            source_score: 0.9,
-            strength_score: 0.5,
-            recency_score: 0.1,
-        };
-        let c1 = base_confidence(&inputs, &w1);
+    let inputs = ScoreInputs {
+        source_score: 0.9,
+        strength_score: 0.5,
+        recency_score: 0.1,
+    };
+    let c1 = base_confidence(&inputs, &w1);
 
-        // Ensure different mtime (Windows granularity)
-        thread::sleep(Duration::from_millis(1100));
+    // Ensure different mtime (Windows granularity)
+    thread::sleep(Duration::from_millis(1100));
 
-        write_file(
-            &path,
-            r#"{"w_source":2.0,"w_strength":1.0,"w_recency":0.0}"#,
-        );
-        let w2 = hot.current();
-        let c2 = base_confidence(&inputs, &w2);
+    write_file(
+        &path,
+        r#"{"w_source":2.0,"w_strength":1.0,"w_recency":0.0}"#,
+    );
+    let w2 = hot.current();
+    let c2 = base_confidence(&inputs, &w2);
 
-        // With higher weight on source and zero on recency, expect a change
-        assert_ne!(c1, c2);
-    });
+    // With higher weight on source and zero on recency, expect a change
+    assert_ne!(c1, c2);
+
+    // Cleanup
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir_all(tmp);
 }
 
 // --- RULES ---
 
 #[test]
 fn f3_rules_set_action_boost_conf_and_add_reason() {
-    with_temp_dir(|tmp| {
-        let rules_path = tmp.join("rules.json");
-        write_file(
-            &rules_path,
-            r#"
+    // Ani tady neměníme CWD – použijeme absolutní cestu k dočasnému souboru.
+    let tmp = tmp_dir();
+    let rules_path = tmp.join("rules.json");
+
+    write_file(
+        &rules_path,
+        r#"
 {
   "rules": [
     {
@@ -245,16 +240,19 @@ fn f3_rules_set_action_boost_conf_and_add_reason() {
   ]
 }
 "#,
-        );
+    );
 
-        let hot = HotReloadRules::new(Some(&rules_path));
-        let rules = hot.current();
+    let hot = HotReloadRules::new(Some(&rules_path));
+    let rules = hot.current();
 
-        let text = "Company beats earnings; considering buyback this quarter.";
-        let (maybe_action, delta, extra) = apply_rules_to_text(text, &rules);
+    let text = "Company beats earnings; considering buyback this quarter.";
+    let (maybe_action, delta, extra) = apply_rules_to_text(text, &rules);
 
-        assert_eq!(maybe_action.as_deref(), Some("BUY"));
-        assert!(delta > 0.0);
-        assert!(extra.iter().any(|r| r.contains("earnings")));
-    });
+    assert_eq!(maybe_action.as_deref(), Some("BUY"));
+    assert!(delta > 0.0);
+    assert!(extra.iter().any(|r| r.contains("earnings")));
+
+    // Cleanup
+    let _ = fs::remove_file(&rules_path);
+    let _ = fs::remove_dir_all(tmp);
 }

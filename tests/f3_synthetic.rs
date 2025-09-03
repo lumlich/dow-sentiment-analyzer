@@ -1,6 +1,7 @@
 // tests/f3_synthetic.rs
 // Synthetic integration tests for Phase 3 (NER, Rerank, Antispam, Calibration, Rules).
-// These tests avoid touching the project's real ./config by using a temporary working directory.
+// Tyto testy NEPOUŽÍVAJÍ process-wide CWD. NER čte config přes NER_CONFIG_DIR
+// nastavené na absolutní cestu do dočasného adresáře, takže jsou stabilní i v CI (paralelní běh).
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -31,17 +32,6 @@ fn tmp_dir() -> PathBuf {
     base.join(unique)
 }
 
-fn with_temp_workdir<F: FnOnce()>(f: F) {
-    let old = std::env::current_dir().expect("get cwd");
-    let tmp = tmp_dir();
-    fs::create_dir_all(&tmp).expect("mkdir tmp");
-    std::env::set_current_dir(&tmp).expect("chdir tmp");
-    f();
-    // best-effort cleanup
-    let _ = std::env::set_current_dir(old);
-    let _ = fs::remove_dir_all(tmp);
-}
-
 fn write_file(path: impl AsRef<Path>, content: &str) {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
@@ -52,24 +42,39 @@ fn write_file(path: impl AsRef<Path>, content: &str) {
     f.sync_all().unwrap();
 }
 
+/// Spustí blok s dočasným adresářem a po skončení uklidí.
+fn with_temp_dir<F: FnOnce(&Path)>(f: F) {
+    let tmp = tmp_dir();
+    fs::create_dir_all(&tmp).expect("mkdir tmp");
+    f(&tmp);
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// Nastaví NER_CONFIG_DIR na absolutní `config/` v dočasném adresáři a po skončení smaže proměnnou.
+/// Vrací cestu k tomuto `config/`.
+fn with_temp_ner_config<F: FnOnce(&Path)>(f: F) {
+    with_temp_dir(|root| {
+        let config = root.join("config");
+        fs::create_dir_all(&config).expect("mkdir config");
+        // Nastav absolutní cestu – žádná závislost na CWD.
+        std::env::set_var("NER_CONFIG_DIR", &config);
+        f(&config);
+        std::env::remove_var("NER_CONFIG_DIR");
+    });
+}
+
 // --- NER ---
 
 #[test]
 fn f3_ner_extracts_from_temp_configs() {
-    with_temp_workdir(|| {
-        // Ensure the ./config directory exists (Windows can be picky with fresh CWDs)
-        std::fs::create_dir_all("config").expect("mkdir config");
-
-        // Force analyzer to read configs from ./config in this temp CWD (stabilizes CI)
-        std::env::set_var("NER_CONFIG_DIR", "config");
-
-        // Prepare ./config/*.json in a throwaway cwd
+    with_temp_ner_config(|config_dir| {
+        // Připrav ./config/*.json (v absolutní cestě)
         write_file(
-            "config/inflation.json",
+            config_dir.join("inflation.json"),
             r#"{"patterns":[{"regex":"(?i)\\binflation\\b","keyword":"inflation"}]}"#,
         );
         write_file(
-            "config/rates.json",
+            config_dir.join("rates.json"),
             r#"{"patterns":[{"regex":"(?i)\\brates?\\b","keyword":"rates"}]}"#,
         );
         // geopolitics/earnings intentionally missing to test graceful skip
@@ -89,9 +94,9 @@ fn f3_ner_extracts_from_temp_configs() {
             reasons
         );
         assert!(
-            reasons.iter().any(|r| {
-                r.eq_ignore_ascii_case("rates: rates") || r.to_lowercase().contains("rates")
-            }),
+            reasons
+                .iter()
+                .any(|r| r.eq_ignore_ascii_case("rates: rates") || r.to_lowercase().contains("rates")),
             "Expected a rates reason, got: {:?}",
             reasons
         );
@@ -99,9 +104,6 @@ fn f3_ner_extracts_from_temp_configs() {
         // Enrichment should keep existing reasons
         let out = enrich_reasons(vec!["pipeline: base".into()], text);
         assert!(out.iter().any(|r| r == "pipeline: base"));
-
-        // Clean up env for any following tests
-        std::env::remove_var("NER_CONFIG_DIR");
     });
 }
 
@@ -189,48 +191,44 @@ fn f3_antispam_filters_near_duplicates_within_window() {
 #[test]
 fn f3_calibration_changes_base_confidence_via_weights() {
     // Create a temp weights.json and use HotReloadWeights::new(Some(path))
-    let tmp = tmp_dir();
-    let path = tmp.join("weights.json");
-    write_file(
-        &path,
-        r#"{"w_source":1.0,"w_strength":1.0,"w_recency":1.0}"#,
-    );
+    with_temp_dir(|tmp| {
+        let path = tmp.join("weights.json");
+        write_file(
+            &path,
+            r#"{"w_source":1.0,"w_strength":1.0,"w_recency":1.0}"#,
+        );
 
-    let hot = HotReloadWeights::new(Some(&path));
-    let w1 = hot.current();
+        let hot = HotReloadWeights::new(Some(&path));
+        let w1 = hot.current();
 
-    let inputs = ScoreInputs {
-        source_score: 0.9,
-        strength_score: 0.5,
-        recency_score: 0.1,
-    };
-    let c1 = base_confidence(&inputs, &w1);
+        let inputs = ScoreInputs {
+            source_score: 0.9,
+            strength_score: 0.5,
+            recency_score: 0.1,
+        };
+        let c1 = base_confidence(&inputs, &w1);
 
-    // Ensure different mtime (Windows granularity)
-    thread::sleep(Duration::from_millis(1100));
+        // Ensure different mtime (Windows granularity)
+        thread::sleep(Duration::from_millis(1100));
 
-    write_file(
-        &path,
-        r#"{"w_source":2.0,"w_strength":1.0,"w_recency":0.0}"#,
-    );
-    let w2 = hot.current();
-    let c2 = base_confidence(&inputs, &w2);
+        write_file(
+            &path,
+            r#"{"w_source":2.0,"w_strength":1.0,"w_recency":0.0}"#,
+        );
+        let w2 = hot.current();
+        let c2 = base_confidence(&inputs, &w2);
 
-    // With higher weight on source and zero on recency, expect a change
-    assert_ne!(c1, c2);
-
-    // Cleanup
-    let _ = fs::remove_file(&path);
-    let _ = fs::remove_dir_all(tmp);
+        // With higher weight on source and zero on recency, expect a change
+        assert_ne!(c1, c2);
+    });
 }
 
 // --- RULES ---
 
 #[test]
 fn f3_rules_set_action_boost_conf_and_add_reason() {
-    with_temp_workdir(|| {
-        // Prepare a rules.json and load via HotReloadRules(Some(path))
-        let rules_path = PathBuf::from("rules.json");
+    with_temp_dir(|tmp| {
+        let rules_path = tmp.join("rules.json");
         write_file(
             &rules_path,
             r#"

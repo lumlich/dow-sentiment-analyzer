@@ -54,7 +54,10 @@ fn f3_ner_extracts_from_temp_configs() {
     fs::create_dir_all(&config_dir).expect("mkdir tmp/config");
 
     let config_dir_abs = config_dir.canonicalize().unwrap_or(config_dir.clone());
-    std::env::set_var("NER_CONFIG_DIR", config_dir_abs.to_string_lossy().to_string());
+    std::env::set_var(
+        "NER_CONFIG_DIR",
+        config_dir_abs.to_string_lossy().to_string(),
+    );
 
     write_file(
         config_dir_abs.join("inflation.json"),
@@ -103,15 +106,18 @@ fn f3_ner_extracts_from_temp_configs() {
         let _ = std::env::set_current_dir(old_cwd);
 
         has_inflation = reasons.iter().any(|r| {
-            r.eq_ignore_ascii_case("inflation: inflation")
-                || r.to_lowercase().contains("inflation")
+            r.eq_ignore_ascii_case("inflation: inflation") || r.to_lowercase().contains("inflation")
         });
         has_rates = reasons
             .iter()
             .any(|r| r.eq_ignore_ascii_case("rates: rates") || r.to_lowercase().contains("rates"));
     }
 
-    assert!(has_inflation, "Expected an inflation reason, got: {:?}", reasons);
+    assert!(
+        has_inflation,
+        "Expected an inflation reason, got: {:?}",
+        reasons
+    );
     assert!(has_rates, "Expected a rates reason, got: {:?}", reasons);
 
     // Enrichment should keep existing reasons

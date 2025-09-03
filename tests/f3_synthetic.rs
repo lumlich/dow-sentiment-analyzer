@@ -60,6 +60,9 @@ fn f3_ner_extracts_from_temp_configs() {
         // Ensure the ./config directory exists (Windows can be picky with fresh CWDs)
         std::fs::create_dir_all("config").expect("mkdir config");
 
+        // Force analyzer to read configs from ./config in this temp CWD (stabilizes CI)
+        std::env::set_var("NER_CONFIG_DIR", "config");
+
         // Prepare ./config/*.json in a throwaway cwd
         write_file(
             "config/inflation.json",
@@ -96,6 +99,9 @@ fn f3_ner_extracts_from_temp_configs() {
         // Enrichment should keep existing reasons
         let out = enrich_reasons(vec!["pipeline: base".into()], text);
         assert!(out.iter().any(|r| r == "pipeline: base"));
+
+        // Clean up env for any following tests
+        std::env::remove_var("NER_CONFIG_DIR");
     });
 }
 

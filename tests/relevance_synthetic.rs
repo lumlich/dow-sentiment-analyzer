@@ -162,7 +162,7 @@ fn build_cases() -> Vec<Case> {
         }
     }
 
-    // 2) Proximity‑based relevant (djia + fed/rates nearby) => pass
+    // 2) Proximity-based relevant (djia + fed/rates nearby) => pass
     let mut proximity_ok = Vec::new();
     for &d in &["dow", "djia"] {
         for &m in &["fomc", "fed", "rates"] {
@@ -329,8 +329,8 @@ fn synthetic_relevance_suite() {
     let mut buf = String::new();
     writeln!(
         &mut buf,
-        "{:<4} | {:<5} | {:<5} | {:<5} | {:<7} | {}",
-        "Idx", "Expect", "Got", "Score", "Reason", "Text"
+        "{:<4} | {:<5} | {:<5} | {:<5} | {:<7} | Text",
+        "Idx", "Expect", "Got", "Score", "Reason"
     )
     .unwrap();
     writeln!(&mut buf, "{}", "-".repeat(120)).unwrap();
@@ -355,7 +355,7 @@ fn synthetic_relevance_suite() {
             (true, false) => fn_ += 1,
         }
 
-        let first_reason = r.reasons.get(0).map(|s| s.as_str()).unwrap_or("-");
+        let first_reason = r.reasons.first().map(|s| s.as_str()).unwrap_or("-");
         let reason_cell = if show_all {
             format!("{:?}", r.reasons)
         } else if show_reasons {

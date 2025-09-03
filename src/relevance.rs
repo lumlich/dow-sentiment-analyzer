@@ -1310,8 +1310,8 @@ need = ["macro","hard"]
         let total = samples.len();
 
         println!(
-            "{:<4} {:<6} {:<6} {:<6} {:<36}  {}",
-            "#", "EXP", "GOT", "SCORE", "REASONS", "TEXT"
+            "{:<4} {:<6} {:<6} {:<6} {:<36}  TEXT",
+            "#", "EXP", "GOT", "SCORE", "REASONS"
         );
         println!("{}", "-".repeat(120));
 

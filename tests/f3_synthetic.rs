@@ -1,6 +1,7 @@
 // tests/f3_synthetic.rs
 // Synthetic integration tests for Phase 3 (NER, Rerank, Antispam, Calibration, Rules).
-// These tests avoid touching the project's real ./config by using a temporary working directory.
+// Tyto testy se vyhýbají skutečnému ./config tak, že pro NER používají vlastní temp adresář
+// a nesahají na process-wide current working directory (kromě řízeného fallbacku).
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -19,6 +20,7 @@ use dow_sentiment_analyzer::analyze::{
     scoring::{base_confidence, ScoreInputs},
     weights::HotReloadWeights,
 };
+use serial_test::serial;
 
 // --- test helpers ---
 
@@ -29,17 +31,6 @@ fn tmp_dir() -> PathBuf {
         std::time::UNIX_EPOCH.elapsed().unwrap().as_millis()
     );
     base.join(unique)
-}
-
-fn with_temp_workdir<F: FnOnce()>(f: F) {
-    let old = std::env::current_dir().expect("get cwd");
-    let tmp = tmp_dir();
-    fs::create_dir_all(&tmp).expect("mkdir tmp");
-    std::env::set_current_dir(&tmp).expect("chdir tmp");
-    f();
-    // best-effort cleanup
-    let _ = std::env::set_current_dir(old);
-    let _ = fs::remove_dir_all(tmp);
 }
 
 fn write_file(path: impl AsRef<Path>, content: &str) {
@@ -55,55 +46,93 @@ fn write_file(path: impl AsRef<Path>, content: &str) {
 // --- NER ---
 
 #[test]
+#[serial] // test pracuje s env proměnnou/cwd; držíme ho sériově kvůli stabilitě v CI
 fn f3_ner_extracts_from_temp_configs() {
-    with_temp_workdir(|| {
-        // Ensure the ./config directory exists (Windows can be picky with fresh CWDs)
-        std::fs::create_dir_all("config").expect("mkdir config");
+    // 1) Primárně zkusíme přes NER_CONFIG_DIR (bez změny CWD)
+    let tmp = tmp_dir();
+    let config_dir = tmp.join("config");
+    fs::create_dir_all(&config_dir).expect("mkdir tmp/config");
 
-        // Prepare ./config/*.json in a throwaway cwd
+    let config_dir_abs = config_dir.canonicalize().unwrap_or(config_dir.clone());
+    std::env::set_var(
+        "NER_CONFIG_DIR",
+        config_dir_abs.to_string_lossy().to_string(),
+    );
+
+    write_file(
+        config_dir_abs.join("inflation.json"),
+        r#"{"patterns":[{"regex":"(?i)\\binflation\\b","keyword":"inflation"}]}"#,
+    );
+    write_file(
+        config_dir_abs.join("rates.json"),
+        r#"{"patterns":[{"regex":"(?i)\\brates?\\b","keyword":"rates"}]}"#,
+    );
+
+    let text = "Inflation is rising and central bank raises rates.";
+    let mut reasons = extract_reasons_from_configs(text);
+    eprintln!("NER reasons (ENV path): {:?}", reasons);
+
+    let mut has_inflation = reasons.iter().any(|r| {
+        r.eq_ignore_ascii_case("inflation: inflation") || r.to_lowercase().contains("inflation")
+    });
+    let mut has_rates = reasons
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case("rates: rates") || r.to_lowercase().contains("rates"));
+
+    // 2) Pokud impl. nečte NER_CONFIG_DIR, uděláme řízený fallback: dočasně přepneme CWD
+    if !(has_inflation && has_rates) {
+        let old_cwd = std::env::current_dir().expect("get cwd");
+        let fallback_root = tmp.join("cwd_fallback");
+        let fallback_cfg = fallback_root.join("config");
+        fs::create_dir_all(&fallback_cfg).expect("mkdir fallback/config");
+
         write_file(
-            "config/inflation.json",
+            fallback_cfg.join("inflation.json"),
             r#"{"patterns":[{"regex":"(?i)\\binflation\\b","keyword":"inflation"}]}"#,
         );
         write_file(
-            "config/rates.json",
+            fallback_cfg.join("rates.json"),
             r#"{"patterns":[{"regex":"(?i)\\brates?\\b","keyword":"rates"}]}"#,
         );
-        // geopolitics/earnings intentionally missing to test graceful skip
 
-        // Should pick up both categories when present
-        let text = "Inflation is rising and central bank raises rates.";
-        let reasons = extract_reasons_from_configs(text);
+        // zajistíme, aby se nepoužil ENV fallback
+        std::env::remove_var("NER_CONFIG_DIR");
+        std::env::set_current_dir(&fallback_root).expect("chdir fallback_root");
 
-        // Expect category/keyword presence, tolerant to formatting/case
-        eprintln!("NER reasons: {:?}", reasons);
-        assert!(
-            reasons.iter().any(|r| {
-                r.eq_ignore_ascii_case("inflation: inflation")
-                    || r.to_lowercase().contains("inflation")
-            }),
-            "Expected an inflation reason, got: {:?}",
-            reasons
-        );
-        assert!(
-            reasons.iter().any(|r| {
-                r.eq_ignore_ascii_case("rates: rates") || r.to_lowercase().contains("rates")
-            }),
-            "Expected a rates reason, got: {:?}",
-            reasons
-        );
+        reasons = extract_reasons_from_configs(text);
+        eprintln!("NER reasons (CWD fallback): {:?}", reasons);
 
-        // Enrichment should keep existing reasons
-        let out = enrich_reasons(vec!["pipeline: base".into()], text);
-        assert!(out.iter().any(|r| r == "pipeline: base"));
-    });
+        // obnovit CWD
+        let _ = std::env::set_current_dir(old_cwd);
+
+        has_inflation = reasons.iter().any(|r| {
+            r.eq_ignore_ascii_case("inflation: inflation") || r.to_lowercase().contains("inflation")
+        });
+        has_rates = reasons
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case("rates: rates") || r.to_lowercase().contains("rates"));
+    }
+
+    assert!(
+        has_inflation,
+        "Expected an inflation reason, got: {:?}",
+        reasons
+    );
+    assert!(has_rates, "Expected a rates reason, got: {:?}", reasons);
+
+    // Enrichment should keep existing reasons
+    let out = enrich_reasons(vec!["pipeline: base".into()], text);
+    assert!(out.iter().any(|r| r == "pipeline: base"));
+
+    // úklid
+    std::env::remove_var("NER_CONFIG_DIR");
+    let _ = fs::remove_dir_all(tmp);
 }
 
 // --- RERANK ---
 
 #[test]
 fn f3_rerank_prioritizes_latest_and_decays_duplicates() {
-    // Make earlier statements EXACTLY identical to the latest to guarantee similarity >= 0.90
     let items = vec![
         Statement {
             source: "Fed".into(),
@@ -115,14 +144,14 @@ fn f3_rerank_prioritizes_latest_and_decays_duplicates() {
         Statement {
             source: "Fed".into(),
             timestamp: 2000,
-            text: "We will hike now".into(), // exact duplicate of latest text
+            text: "We will hike now".into(),
             weight: 1.0,
             relevance: 0.65,
         },
         Statement {
             source: "Fed".into(),
             timestamp: 3000,
-            text: "We will hike now".into(), // latest & relevant
+            text: "We will hike now".into(),
             weight: 1.0,
             relevance: 0.8,
         },
@@ -135,10 +164,7 @@ fn f3_rerank_prioritizes_latest_and_decays_duplicates() {
         DEFAULT_DUPLICATE_DECAY,
     );
 
-    // Latest relevant statement should appear before earlier ones
     assert_eq!(out.first().unwrap().timestamp, 3000);
-
-    // Earlier exact-duplicate should be decayed below original
     let older = out.iter().find(|s| s.timestamp == 2000).unwrap();
     assert!(older.weight < 1.0, "expected older duplicate to be decayed");
 }
@@ -154,21 +180,19 @@ fn f3_antispam_filters_near_duplicates_within_window() {
     let params = AntiSpamParams {
         window_size: 16,
         similarity_threshold: 0.90,
-        time_window_secs: 600, // 10 minutes
+        time_window_secs: 600,
     };
     let mut anti = AntiSpam::new(params);
 
-    // Make duplicates EXACTLY identical in the time window to guarantee filtering
     let inputs = vec![
         (ts(0), "BREAKING: Fed will hike".to_string()),
-        (ts(60), "BREAKING: Fed will hike".to_string()), // identical, 1 min later
-        (ts(120), "BREAKING: Fed will hike".to_string()), // identical, 2 min later
-        (ts(700), "Fed keeps rates unchanged".to_string()), // different, 11+ min later
+        (ts(60), "BREAKING: Fed will hike".to_string()),
+        (ts(120), "BREAKING: Fed will hike".to_string()),
+        (ts(700), "Fed keeps rates unchanged".to_string()),
     ];
 
     let kept = anti.filter_batch(inputs.clone());
 
-    // Expect to keep first and the later different one; near-dupes in window are filtered
     assert_eq!(
         kept.len(),
         2,
@@ -182,7 +206,6 @@ fn f3_antispam_filters_near_duplicates_within_window() {
 
 #[test]
 fn f3_calibration_changes_base_confidence_via_weights() {
-    // Create a temp weights.json and use HotReloadWeights::new(Some(path))
     let tmp = tmp_dir();
     let path = tmp.join("weights.json");
     write_file(
@@ -200,7 +223,6 @@ fn f3_calibration_changes_base_confidence_via_weights() {
     };
     let c1 = base_confidence(&inputs, &w1);
 
-    // Ensure different mtime (Windows granularity)
     thread::sleep(Duration::from_millis(1100));
 
     write_file(
@@ -210,10 +232,8 @@ fn f3_calibration_changes_base_confidence_via_weights() {
     let w2 = hot.current();
     let c2 = base_confidence(&inputs, &w2);
 
-    // With higher weight on source and zero on recency, expect a change
     assert_ne!(c1, c2);
 
-    // Cleanup
     let _ = fs::remove_file(&path);
     let _ = fs::remove_dir_all(tmp);
 }
@@ -222,12 +242,12 @@ fn f3_calibration_changes_base_confidence_via_weights() {
 
 #[test]
 fn f3_rules_set_action_boost_conf_and_add_reason() {
-    with_temp_workdir(|| {
-        // Prepare a rules.json and load via HotReloadRules(Some(path))
-        let rules_path = PathBuf::from("rules.json");
-        write_file(
-            &rules_path,
-            r#"
+    let tmp = tmp_dir();
+    let rules_path = tmp.join("rules.json");
+
+    write_file(
+        &rules_path,
+        r#"
 {
   "rules": [
     {
@@ -241,16 +261,18 @@ fn f3_rules_set_action_boost_conf_and_add_reason() {
   ]
 }
 "#,
-        );
+    );
 
-        let hot = HotReloadRules::new(Some(&rules_path));
-        let rules = hot.current();
+    let hot = HotReloadRules::new(Some(&rules_path));
+    let rules = hot.current();
 
-        let text = "Company beats earnings; considering buyback this quarter.";
-        let (maybe_action, delta, extra) = apply_rules_to_text(text, &rules);
+    let text = "Company beats earnings; considering buyback this quarter.";
+    let (maybe_action, delta, extra) = apply_rules_to_text(text, &rules);
 
-        assert_eq!(maybe_action.as_deref(), Some("BUY"));
-        assert!(delta > 0.0);
-        assert!(extra.iter().any(|r| r.contains("earnings")));
-    });
+    assert_eq!(maybe_action.as_deref(), Some("BUY"));
+    assert!(delta > 0.0);
+    assert!(extra.iter().any(|r| r.contains("earnings")));
+
+    let _ = fs::remove_file(&rules_path);
+    let _ = fs::remove_dir_all(tmp);
 }

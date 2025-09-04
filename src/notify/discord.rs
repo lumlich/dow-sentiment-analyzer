@@ -66,10 +66,8 @@ impl DiscordNotifier {
                 Ok(rsp) => {
                     if let Err(e) = rsp.error_for_status_ref() {
                         if attempt < self.max_retries {
-                            tokio::time::sleep(
-                                Duration::from_millis(500u64 << (attempt - 1)),
-                            )
-                            .await;
+                            tokio::time::sleep(Duration::from_millis(500u64 << (attempt - 1)))
+                                .await;
                             continue;
                         }
                         return Err(anyhow!("Discord webhook HTTP error: {e}"));
@@ -78,10 +76,7 @@ impl DiscordNotifier {
                 }
                 Err(e) => {
                     if attempt < self.max_retries {
-                        tokio::time::sleep(
-                            Duration::from_millis(500u64 << (attempt - 1)),
-                        )
-                        .await;
+                        tokio::time::sleep(Duration::from_millis(500u64 << (attempt - 1))).await;
                         continue;
                     }
                     return Err(anyhow!("Discord webhook request failed: {e}"));

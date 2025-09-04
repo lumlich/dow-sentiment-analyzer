@@ -15,6 +15,7 @@ It processes short texts (e.g., statements by Trump, the Fed, Yellen, Reuters, e
 - Confidence calibration with recent volume context (last 10 minutes).
 - Rolling metrics (48h average & count) and in-memory decision history.
 - Clean JSON API + debug endpoints.
+- Slack + Discord webhook notifications (configurable).
 - **Optional AI integration with caching and daily call limits.**
 
 ---
@@ -137,18 +138,18 @@ verb = 1
 [[anchors]]
 id = "djia_core_names"
 category = "hard"
-pattern = "(?i)\\b(djia|dow jones|the dow)\\b"
+pattern = "(?i)\b(djia|dow jones|the dow)\b"
 
 [[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
-pattern = "(?i)\\bpowell\\b"
-near = { pattern = "(?i)\\b(fed|fomc|rates?)\\b", window = 6 }
+pattern = "(?i)\bpowell\b"
+near = { pattern = "(?i)\b(fed|fomc|rates?)\b", window = 6 }
 
 [[blockers]]
 id = "dji_drones"
-pattern = "(?i)\\bdji\\b"
-near = { pattern = "(?i)\\b(drone|mavic|gimbal)\\b", window = 4 }
+pattern = "(?i)\bdji\b"
+near = { pattern = "(?i)\b(drone|mavic|gimbal)\b", window = 4 }
 
 [[combos.pass_any]]
 need = ["macro","hard"]
@@ -324,3 +325,10 @@ Remove-Item Env:OPENAI_API_KEY
 
 ## Contributing
 Open an Issue with `feat:` or `bug:` prefix; PRs welcome.
+
+---
+
+## Notifications
+
+- **Slack**: configurable webhook via `SLACK_WEBHOOK_URL`
+- **Discord**: configurable webhook via `DISCORD_WEBHOOK_URL`

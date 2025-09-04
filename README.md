@@ -332,3 +332,5 @@ Open an Issue with `feat:` or `bug:` prefix; PRs welcome.
 
 - **Slack**: configurable webhook via `SLACK_WEBHOOK_URL`
 - **Discord**: configurable webhook via `DISCORD_WEBHOOK_URL`
+
+[![Security audit](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/audit.yml/badge.svg)](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/audit.yml)

@@ -33,22 +33,24 @@ impl DiscordNotifier {
     }
 
     pub async fn send_alert(&self, alert: &AlertPayload) -> Result<()> {
-        // Build a compact, readable embed
         let title = format!("Decision: {}", alert.decision);
+
+        // FIX: build reasons string as owned value
+        let reasons_str: String = if alert.reasons.is_empty() {
+            "—".to_string()
+        } else {
+            alert.reasons.join(" · ")
+        };
+
         let description = format!(
             "**Confidence:** {:.0}%\n**Reasons:** {}\n**Time (UTC):** {}",
             alert.confidence * 100.0,
-            if alert.reasons.is_empty() {
-                "—"
-            } else {
-                &alert.reasons.join(" · ")
-            },
+            reasons_str,
             alert.timestamp_iso
         );
 
         let payload = DiscordWebhookPayload::embed(&title, &description);
 
-        // Retry with simple exponential backoff: 0.5s, 1s, 2s…
         let mut attempt: u8 = 0;
         loop {
             attempt += 1;
@@ -64,16 +66,22 @@ impl DiscordNotifier {
                 Ok(rsp) => {
                     if let Err(e) = rsp.error_for_status_ref() {
                         if attempt < self.max_retries {
-                            tokio::time::sleep(Duration::from_millis(500u64 << (attempt - 1))).await;
+                            tokio::time::sleep(
+                                Duration::from_millis(500u64 << (attempt - 1)),
+                            )
+                            .await;
                             continue;
                         }
                         return Err(anyhow!("Discord webhook HTTP error: {e}"));
                     }
-                    return Ok(()); // success
+                    return Ok(());
                 }
                 Err(e) => {
                     if attempt < self.max_retries {
-                        tokio::time::sleep(Duration::from_millis(500u64 << (attempt - 1))).await;
+                        tokio::time::sleep(
+                            Duration::from_millis(500u64 << (attempt - 1)),
+                        )
+                        .await;
                         continue;
                     }
                     return Err(anyhow!("Discord webhook request failed: {e}"));

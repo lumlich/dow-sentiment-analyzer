@@ -14,38 +14,11 @@ use dow_sentiment_analyzer::relevance::{
     DEFAULT_RELEVANCE_CONFIG_PATH, ENV_RELEVANCE_CONFIG_PATH,
 };
 
-// --- Discord test ---
-use serde::Serialize;
-
-#[derive(Serialize)]
-struct DiscordMessage<'a> {
-    content: &'a str,
-}
-
-/// Sends a simple test message to a Discord webhook.
-/// We pass the webhook value explicitly (from Shuttle SecretStore).
-async fn send_discord_test_message(webhook: &str) -> anyhow::Result<()> {
-    let msg = DiscordMessage {
-        content: "Test alert from dow-sentiment-analyzer ✅",
-    };
-
-    let client = reqwest::Client::new();
-    let res = client
-        .post(webhook)
-        .json(&msg)
-        .send()
-        .await?
-        .error_for_status();
-
-    match res {
-        Ok(_) => {
-            tracing::info!("Sent test Discord message");
-            Ok(())
-        }
-        Err(e) => Err(anyhow::anyhow!("Failed to send Discord message: {e}")),
-    }
-}
-// --- /Discord test ---
+// --- Notifications ---
+mod notify;
+use notify::discord::DiscordNotifier;
+use notify::slack::SlackNotifier;
+use notify::AlertPayload;
 
 fn enable_dev_tracing() {
     let dev_flag = std::env::var("RELEVANCE_DEV_LOG")
@@ -91,7 +64,7 @@ async fn axum(
     let _ = dotenvy::dotenv();
     enable_dev_tracing();
 
-    // --- AI quick probe (local/dev only) + optional Discord test ---
+    // --- AI quick probe (local/dev only) + optional Discord/Slack tests ---
     if matches!(
         std::env::var("SHUTTLE_ENV")
             .unwrap_or_default()
@@ -109,13 +82,51 @@ async fn axum(
             .unwrap_or(false);
 
         if notify_discord_enabled {
-            // Read webhook from injected SecretStore instead of env
             if let Some(hook) = secrets.get("DISCORD_WEBHOOK_URL") {
-                if let Err(e) = send_discord_test_message(&hook).await {
-                    tracing::warn!(error = ?e, "Discord test message failed");
+                let notifier = DiscordNotifier::new(hook).with_timeout(5).with_retries(3);
+                let now = chrono::Utc::now().to_rfc3339();
+
+                let payload = AlertPayload {
+                    decision: "TEST".into(),
+                    confidence: 0.42,
+                    reasons: vec!["wiring OK".into(), "webhook reachable".into()],
+                    timestamp_iso: now.clone(),
+                };
+
+                if let Err(e) = notifier.send_alert(&payload).await {
+                    tracing::warn!(error=?e, "Discord notifier test failed");
+                } else {
+                    tracing::info!("Discord notifier test sent");
                 }
             } else {
                 tracing::warn!("DISCORD_WEBHOOK_URL not found in SecretStore");
+            }
+        }
+
+        // Gate: send Slack test only when NOTIFY_SLACK is truthy
+        let notify_slack_enabled = std::env::var("NOTIFY_SLACK")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        if notify_slack_enabled {
+            if let Some(hook) = secrets.get("SLACK_WEBHOOK") {
+                let notifier = SlackNotifier::new(hook).with_timeout(5).with_retries(3);
+                let now = chrono::Utc::now().to_rfc3339();
+
+                let payload = AlertPayload {
+                    decision: "TEST".into(),
+                    confidence: 0.42,
+                    reasons: vec!["wiring OK".into(), "webhook reachable".into()],
+                    timestamp_iso: now,
+                };
+
+                if let Err(e) = notifier.send_alert(&payload).await {
+                    tracing::warn!(error=?e, "Slack notifier test failed");
+                } else {
+                    tracing::info!("Slack notifier test sent");
+                }
+            } else {
+                tracing::warn!("SLACK_WEBHOOK not found in SecretStore");
             }
         }
     }

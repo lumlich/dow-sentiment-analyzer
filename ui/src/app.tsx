@@ -5,6 +5,7 @@ import { WhyPanel } from './components/WhyPanel';
 import { EvidencePanel } from './components/EvidencePanel';
 import type { EvidenceItem } from './components/EvidencePanel';
 import { TrendPanel } from './components/TrendPanel';
+import AlertsInfoBox from '@/components/AlertsInfoBox';
 import './app.css';
 
 type Decision = 'BUY' | 'SELL' | 'HOLD';
@@ -309,6 +310,11 @@ export function App() {
           {aiReason}
         </div>
       )}
+
+      {/* Instant alerts info box (Discord/Slack) */}
+      <div style={{ marginBottom: '12px' }}>
+        <AlertsInfoBox />
+      </div>
 
       {/* Verdict wrap for blink effect */}
       <div ref={verdictWrapRef} class="verdict-wrap">

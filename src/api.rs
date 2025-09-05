@@ -147,22 +147,17 @@ pub fn router(state_from_main: RelevanceAppState) -> Router<()> {
         .route("/analyze", post(analyze))
         // Batch scoring (internal/dev)
         .route("/batch", post(analyze_batch))
-        // Decision endpoint: POST je veřejný vždy
-        .route("/decide", post(decide));
+        // Decision endpoint: GET = stabilní shape pro detektor změn, POST = plné rozhodování
+        .route("/decide", get(decide_get).post(decide));
 
     // Debug / introspection jen když je povoleno
     if debug_routes_enabled() {
         r = r
-            // GET na poslední rozhodnutí (jen debug)
-            .route("/decide", get(debug_last_decision))
             .route("/debug/rolling", get(debug_rolling))
             .route("/debug/history", get(debug_history))
             .route("/debug/last-decision", get(debug_last_decision))
             .route("/debug/source-weight", get(debug_source_weight))
-            .route(
-                "/admin/reload-source-weights",
-                get(admin_reload_source_weights),
-            );
+            .route("/admin/reload-source-weights", get(admin_reload_source_weights));
     }
 
     r.layer(cors)
@@ -203,7 +198,16 @@ struct AnalyzeOut {
     contributors: Vec<String>,
 }
 
-// ---- AI response metadata for /decide ----
+// ---- /decide (GET): stabilní tvar pro change-detector ----
+
+#[derive(serde::Serialize)]
+struct DecideOut {
+    decision: String,
+    confidence: f32,
+    reasons: Vec<String>,
+}
+
+// ---- AI response metadata for /decide (POST) ----
 
 #[derive(serde::Serialize, Default)]
 struct ApiAiInfo {
@@ -370,6 +374,32 @@ async fn ai_analyze_safely(
     ai.analyze(&ai_corpus)
         .await
         .map(|ai_out| sanitize_reason(&ai_out.short_reason))
+}
+
+/// GET /decide — stabilní shape pro change-detector
+async fn decide_get() -> Json<DecideOut> {
+    let state = app_state();
+    // 1) Zkusíme poslední rozhodnutí z historie
+    if let Some(h) = state.history.snapshot_last_n(1).pop() {
+        let decision = format!("{:?}", h.verdict).to_uppercase();
+        let reasons = vec![format!(
+            "from history: {} sources / {} scores in last snapshot",
+            h.top_sources.len(),
+            h.top_scores.len()
+        )];
+        return Json(DecideOut {
+            decision,
+            confidence: h.confidence,
+            reasons,
+        });
+    }
+
+    // 2) Fallback — žádná historie: HOLD 0.50
+    Json(DecideOut {
+        decision: "HOLD".into(),
+        confidence: 0.50,
+        reasons: vec!["no history yet".into()],
+    })
 }
 
 #[axum::debug_handler]

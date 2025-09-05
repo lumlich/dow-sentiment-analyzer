@@ -1,111 +1,63 @@
-use super::AlertPayload;
-use anyhow::{anyhow, Result};
+use anyhow::{Context, Result};
 use reqwest::Client;
-use serde::Serialize;
-use std::time::Duration;
 
-#[derive(Clone)]
+use super::{NotificationEvent, Notifier};
+
 pub struct DiscordNotifier {
-    webhook: String,
+    webhook_url: Option<String>,
     client: Client,
-    timeout: Duration,
-    max_retries: u8,
 }
 
 impl DiscordNotifier {
-    pub fn new(webhook: String) -> Self {
+    pub fn from_env() -> Self {
         Self {
-            webhook,
+            webhook_url: std::env::var("DISCORD_WEBHOOK_URL").ok(),
             client: Client::new(),
-            timeout: Duration::from_secs(5),
-            max_retries: 3,
         }
     }
 
-    pub fn with_timeout(mut self, secs: u64) -> Self {
-        self.timeout = Duration::from_secs(secs);
+    /// Optional builder for tests/tools
+    pub fn new(url: String) -> Self {
+        Self {
+            webhook_url: Some(url),
+            client: Client::new(),
+        }
+    }
+
+    pub fn with_timeout(self, _secs: u64) -> Self {
         self
     }
 
-    pub fn with_retries(mut self, retries: u8) -> Self {
-        self.max_retries = retries;
+    pub fn with_retries(self, _n: u8) -> Self {
         self
     }
+}
 
-    pub async fn send_alert(&self, alert: &AlertPayload) -> Result<()> {
-        let title = format!("Decision: {}", alert.decision);
-
-        // FIX: build reasons string as owned value
-        let reasons_str: String = if alert.reasons.is_empty() {
-            "—".to_string()
-        } else {
-            alert.reasons.join(" · ")
+#[async_trait::async_trait]
+impl Notifier for DiscordNotifier {
+    async fn send(&self, ev: &NotificationEvent) -> Result<()> {
+        let Some(url) = &self.webhook_url else {
+            tracing::debug!("Discord disabled (no DISCORD_WEBHOOK_URL)");
+            return Ok(());
         };
 
-        let description = format!(
-            "**Confidence:** {:.0}%\n**Reasons:** {}\n**Time (UTC):** {}",
-            alert.confidence * 100.0,
-            reasons_str,
-            alert.timestamp_iso
+        let content = format!(
+            "**DJI alert:** **{:?}** ({:.2})\nReason: {}\n{}",
+            ev.decision,
+            ev.confidence,
+            ev.reasons.get(0).cloned().unwrap_or_default(),
+            ev.ts.to_rfc3339()
         );
+        let body = serde_json::json!({ "content": content });
 
-        let payload = DiscordWebhookPayload::embed(&title, &description);
-
-        let mut attempt: u8 = 0;
-        loop {
-            attempt += 1;
-            let res = self
-                .client
-                .post(&self.webhook)
-                .timeout(self.timeout)
-                .json(&payload)
-                .send()
-                .await;
-
-            match res {
-                Ok(rsp) => {
-                    if let Err(e) = rsp.error_for_status_ref() {
-                        if attempt < self.max_retries {
-                            tokio::time::sleep(Duration::from_millis(500u64 << (attempt - 1)))
-                                .await;
-                            continue;
-                        }
-                        return Err(anyhow!("Discord webhook HTTP error: {e}"));
-                    }
-                    return Ok(());
-                }
-                Err(e) => {
-                    if attempt < self.max_retries {
-                        tokio::time::sleep(Duration::from_millis(500u64 << (attempt - 1))).await;
-                        continue;
-                    }
-                    return Err(anyhow!("Discord webhook request failed: {e}"));
-                }
-            }
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct DiscordEmbed {
-    title: String,
-    description: String,
-}
-
-#[derive(Serialize)]
-struct DiscordWebhookPayload {
-    content: Option<String>,
-    embeds: Vec<DiscordEmbed>,
-}
-
-impl DiscordWebhookPayload {
-    fn embed(title: &str, description: &str) -> Self {
-        Self {
-            content: None,
-            embeds: vec![DiscordEmbed {
-                title: title.to_string(),
-                description: description.to_string(),
-            }],
-        }
+        self.client
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .context("discord post")?
+            .error_for_status()
+            .context("discord non-2xx")?;
+        Ok(())
     }
 }

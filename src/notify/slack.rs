@@ -1,96 +1,63 @@
-use super::AlertPayload;
-use anyhow::{anyhow, Result};
+use anyhow::{Context, Result};
 use reqwest::Client;
-use serde::Serialize;
-use std::time::Duration;
 
-#[derive(Clone)]
+use super::{NotificationEvent, Notifier};
+
 pub struct SlackNotifier {
-    webhook: String,
+    webhook_url: Option<String>,
     client: Client,
-    timeout: Duration,
-    max_retries: u8,
 }
 
 impl SlackNotifier {
-    /// Create a new SlackNotifier with default timeout (5s) and retries (3)
-    pub fn new(webhook: String) -> Self {
+    pub fn from_env() -> Self {
         Self {
-            webhook,
+            webhook_url: std::env::var("SLACK_WEBHOOK_URL").ok(),
             client: Client::new(),
-            timeout: Duration::from_secs(5),
-            max_retries: 3,
         }
     }
 
-    /// Builder: set request timeout in seconds
-    pub fn with_timeout(mut self, secs: u64) -> Self {
-        self.timeout = Duration::from_secs(secs);
-        self
-    }
-
-    /// Builder: set max retry attempts
-    pub fn with_retries(mut self, retries: u8) -> Self {
-        self.max_retries = retries;
-        self
-    }
-
-    /// Send an alert payload to Slack Incoming Webhook
-    pub async fn send_alert(&self, payload: &AlertPayload) -> Result<()> {
-        let body = SlackMessage::from(payload);
-
-        for attempt in 1..=self.max_retries {
-            let resp = self
-                .client
-                .post(&self.webhook)
-                .json(&body)
-                .timeout(self.timeout)
-                .send()
-                .await;
-
-            match resp {
-                Ok(r) if r.status().is_success() => return Ok(()),
-                Ok(r) => {
-                    if attempt == self.max_retries {
-                        return Err(anyhow!("Slack webhook failed with status: {}", r.status()));
-                    }
-                    // backoff could be added here if needed
-                }
-                Err(e) => {
-                    if attempt == self.max_retries {
-                        return Err(anyhow!("Slack webhook error: {:?}", e));
-                    }
-                }
-            }
+    /// Optional builder for tests/tools
+    pub fn new(url: String) -> Self {
+        Self {
+            webhook_url: Some(url),
+            client: Client::new(),
         }
+    }
 
-        Err(anyhow!("Slack webhook retries exceeded"))
+    pub fn with_timeout(self, _secs: u64) -> Self {
+        self
+    }
+
+    pub fn with_retries(self, _n: u8) -> Self {
+        self
     }
 }
 
-#[derive(Serialize)]
-struct SlackMessage {
-    text: String,
-}
-
-impl From<&AlertPayload> for SlackMessage {
-    fn from(p: &AlertPayload) -> Self {
-        // Join reasons into a single line for Slack
-        let reasons = if p.reasons.is_empty() {
-            "-".to_string()
-        } else {
-            p.reasons.join(", ")
+#[async_trait::async_trait]
+impl Notifier for SlackNotifier {
+    async fn send(&self, ev: &NotificationEvent) -> Result<()> {
+        let Some(url) = &self.webhook_url else {
+            tracing::debug!("Slack disabled (no SLACK_WEBHOOK_URL)");
+            return Ok(());
         };
 
-        // Added emoji and nicer branding
         let text = format!(
-            ":chart_with_upwards_trend: *Dow Sentiment Analyzer Alert*\n• *Decision:* {}\n• *Confidence:* {:.2}\n• *Reasons:* {}\n• *Time:* {}",
-            p.decision,
-            p.confidence,
-            reasons,
-            p.timestamp_iso
+            "*DJI alert:* *{:?}* ({:.2})\nReason: {}\n@ {}",
+            ev.decision,
+            ev.confidence,
+            ev.reasons.get(0).cloned().unwrap_or_default(),
+            ev.ts.to_rfc3339()
         );
+        let body = serde_json::json!({ "text": text });
 
-        Self { text }
+        self.client
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .context("slack post")?
+            .error_for_status()
+            .context("slack non-2xx")?;
+        Ok(())
     }
 }

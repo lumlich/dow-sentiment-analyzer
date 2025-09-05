@@ -8,6 +8,11 @@ authors = ["Lumir Lichy <lumlich@lumlich.com>"]
 repository = "https://github.com/lumlich/dow-sentiment-analyzer"
 readme = "README.md"
 
+# 👇 Explicit lib target so cargo/RA know the crate root for re-exports
+[lib]
+name = "dow_sentiment_analyzer"
+path = "src/lib.rs"
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.47", features = ["full"] }
@@ -41,8 +46,11 @@ chrono = { version = "0.4", features = ["clock", "serde"] }
 shuttle-runtime = "0.56.0"
 shuttle-axum = "0.56.0"
 
-# External API calls (OpenAI/Claude etc., and Discord webhooks)
+# External API calls (OpenAI/Claude etc., and Discord/Slack webhooks)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Email (SMTP) for notifications
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
 
 [features]
 default = []

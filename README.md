@@ -61,18 +61,24 @@ pong
 
 ### POST /api/analyze
 ```bash
-curl -s -X POST http://localhost:8000/api/analyze   -H "Content-Type: application/json"   -d '{"text":"Fed signals a cautious path to rate cuts this year.","source":"Fed"}'
+curl -s -X POST http://localhost:8000/api/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Fed signals a cautious path to rate cuts this year.","source":"Fed"}'
 ```
 
 ### POST /api/batch
 ```bash
-curl -s -X POST http://localhost:8000/api/batch   -H "Content-Type: application/json"   -d '[{"id":"a1","text":"Trump says Dow will soar.","source":"Trump"},
+curl -s -X POST http://localhost:8000/api/batch \
+  -H "Content-Type: application/json" \
+  -d '[{"id":"a1","text":"Trump says Dow will soar.","source":"Trump"},
        {"id":"b2","text":"Reuters: unexpected slowdown in manufacturing.","source":"Reuters"}]'
 ```
 
 ### POST /api/decide
 ```bash
-curl -s -X POST http://localhost:8000/api/decide   -H "Content-Type: application/json"   -d '[{"source":"Reuters","text":"ISM manufacturing dips below 50; the Dow slips."}]'
+curl -s -X POST http://localhost:8000/api/decide \
+  -H "Content-Type: application/json" \
+  -d '[{"source":"Reuters","text":"ISM manufacturing dips below 50; the Dow slips."}]'
 ```
 Response (example):
 ```json
@@ -114,96 +120,6 @@ We use cargo aliases (see `.cargo/config.toml`) for convenience:
 
 ---
 
-## Phase 6 — Ingest (HTTP + Fixtures)
-
-### Features
-| Feature           | What it does                                                    | Default |
-|-------------------|-----------------------------------------------------------------|---------|
-| `ingest-fixtures` | Build providers from local XML fixtures (no network)            | ✅      |
-| `ingest-http`     | Enable HTTP-backed providers (`from_url()` + `fetch_latest()`)  | ❌      |
-| `strict-metrics`  | Compile strict ingest metrics test                              | ❌      |
-| `strict-e2e`      | Compile a strict E2E smoke test for `/decide`                   | ❌      |
-
-> Defaults remain unchanged: `default = ["ingest-fixtures"]`. CI does **not** make network calls.
-
-### HTTP ingest (opt-in)
-Providers support both fixtures and HTTP:
-```rust
-#[cfg(feature = "ingest-http")]
-{
-    use dow_sentiment_analyzer::ingest::providers::{
-        fed_rss::FedRssProvider,
-        reuters_rss::ReutersRssProvider,
-    };
-
-    let fed     = FedRssProvider::from_url("https://www.federalreserve.gov/feeds/press_all.xml");
-    let reuters = ReutersRssProvider::from_url("https://feeds.reuters.com/reuters/businessNews");
-
-    // Example (do not call in CI):
-    // let fed_items = fed.fetch_latest().await?;
-    // let reu_items = reuters.fetch_latest().await?;
-}
-```
-Telemetry on HTTP errors:
-- Logs `warn!` with provider name
-- Increments `ingest_provider_errors_total`
-
-### End-to-end (fixtures → analyze → verdict)
-A fast, network-free test drives ingest → `/analyze` and asserts a valid decision with non-empty reasons:
-```bash
-cargo test --test ingest_e2e_decision
-```
-
-Strict E2E for `/decide` is opt-in:
-```bash
-cargo test --features "strict-e2e" --test ingest_e2e -- --nocapture
-```
-
-### Build & lint with HTTP enabled (compilation-only)
-```bash
-cargo check  --features ingest-http
-cargo clippy --features ingest-http -- -D warnings
-cargo test   --no-run --features ingest-http
-```
-
-### Runtime backup smoke (optional)
-Quick ways to verify the backup path without CI network calls:
-
-**A) Unit smoke**
-```bash
-cargo test --test backup_cron -- --nocapture
-```
-
-**B) Runtime log check**
-```bash
-# Windows PowerShell
-$env:RUST_LOG = "debug"
-cargo shuttle run
-# Observe logs for messages like: "backup sink stored <n> files"
-```
-
-> The HTTP ingest **does not** include a runtime scheduler. The only scheduler remains the fixture scheduler behind `ingest-fixtures`.
-
----
-
-## Strict Metrics Test (feature-gated)
-
-A stricter ingest metrics test is available behind an optional Cargo feature. By default, it **does not** compile nor run so your local and CI suites stay green.
-
-- Run default suite:
-```bash
-cargo test
-```
-
-- Run with strict metrics enabled:
-```bash
-cargo test --features strict-metrics
-```
-
-CI tip: you can add an optional job in your workflow to run the strict test without blocking the main CI.
-
----
-
 ## Relevance Gate
 
 ### What it does
@@ -229,18 +145,18 @@ verb = 1
 [[anchors]]
 id = "djia_core_names"
 category = "hard"
-pattern = "(?i)\b(djia|dow jones|the dow)\b"
+pattern = "(?i)\\b(djia|dow jones|the dow)\\b"
 
 [[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
-pattern = "(?i)\bpowell\b"
-near = { pattern = "(?i)\b(fed|fomc|rates?)\b", window = 6 }
+pattern = "(?i)\\bpowell\\b"
+near = { pattern = "(?i)\\b(fed|fomc|rates?)\\b", window = 6 }
 
 [[blockers]]
 id = "dji_drones"
-pattern = "(?i)\bdji\b"
-near = { pattern = "(?i)\b(drone|mavic|gimbal)\b", window = 4 }
+pattern = "(?i)\\bdji\\b"
+near = { pattern = "(?i)\\b(drone|mavic|gimbal)\\b", window = 4 }
 
 [[combos.pass_any]]
 need = ["macro","hard"]
@@ -253,6 +169,21 @@ need = ["macro","hard"]
 | `RELEVANCE_THRESHOLD`    | `0.30`                  | Cutoff in `[0.0,1.0]`; below → neutralize       |
 | `RELEVANCE_HOT_RELOAD=1` | off                     | Hot reload config in dev mode                   |
 | `RELEVANCE_DEV_LOG=1`    | off                     | Dev logs with anonymized IDs                    |
+
+---
+
+## Phase 2 – Frontend UI
+[... unchanged ...]
+
+---
+
+## Phase 3 – Contextual rules (AI-ready design)
+[... unchanged ...]
+
+---
+
+## Phase 4 – AI Integration (optional)
+[... unchanged in this snippet ...]
 
 ---
 
@@ -300,21 +231,23 @@ dow_sentiment_analyzer::change_detector::run_change_detector_loop().await?;
 > cargo shuttle run
 > ```
 
----
+### Antiflutter
+Module: `src/notify/antiflutter.rs`  
+- Cooldown-based suppression; first alert always passes.  
+- Unified `DecisionKind` (`BUY/SELL/HOLD/TEST`) lives in `src/notify/mod.rs`.
 
-## Small Env Snippets (Phase 5 follow-up)
+### Test Scenarios (Phase 5)
+Standalone tests validate antiflutter behavior and change detection logic.
 
-For local tinkering scripts/crons:
+Run:
 ```bash
-export DECIDE_ENDPOINT="http://127.0.0.1:8000/api/decide"
-export CHECK_INTERVAL_SECS="15"
+cargo test --tests
 ```
 
-On Windows PowerShell:
-```powershell
-$env:DECIDE_ENDPOINT = "http://127.0.0.1:8000/api/decide"
-$env:CHECK_INTERVAL_SECS = "15"
-```
+They cover:
+- First decision → sends exactly once.
+- Quick oscillation inside cooldown → suppressed.
+- After cooldown → next change is sent.
 
 ---
 

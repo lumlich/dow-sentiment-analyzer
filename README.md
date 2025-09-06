@@ -1,6 +1,7 @@
 # dow-sentiment-analyzer
 
 [![Build status](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/lumlich/dow-sentiment-analyzer/actions)
+[![Security audit](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/audit.yml/badge.svg)](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/audit.yml)
 
 A sentiment analysis and decision engine for Dow Jones futures, built with Rust, Axum, and Tokio.
 
@@ -60,18 +61,24 @@ pong
 
 ### POST /api/analyze
 ```bash
-curl -s -X POST http://localhost:8000/api/analyze   -H "Content-Type: application/json"   -d '{"text":"Fed signals a cautious path to rate cuts this year.","source":"Fed"}'
+curl -s -X POST http://localhost:8000/api/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Fed signals a cautious path to rate cuts this year.","source":"Fed"}'
 ```
 
 ### POST /api/batch
 ```bash
-curl -s -X POST http://localhost:8000/api/batch   -H "Content-Type: application/json"   -d '[{"id":"a1","text":"Trump says Dow will soar.","source":"Trump"},
+curl -s -X POST http://localhost:8000/api/batch \
+  -H "Content-Type: application/json" \
+  -d '[{"id":"a1","text":"Trump says Dow will soar.","source":"Trump"},
        {"id":"b2","text":"Reuters: unexpected slowdown in manufacturing.","source":"Reuters"}]'
 ```
 
 ### POST /api/decide
 ```bash
-curl -s -X POST http://localhost:8000/api/decide   -H "Content-Type: application/json"   -d '[{"source":"Reuters","text":"ISM manufacturing dips below 50; the Dow slips."}]'
+curl -s -X POST http://localhost:8000/api/decide \
+  -H "Content-Type: application/json" \
+  -d '[{"source":"Reuters","text":"ISM manufacturing dips below 50; the Dow slips."}]'
 ```
 Response (example):
 ```json
@@ -138,18 +145,18 @@ verb = 1
 [[anchors]]
 id = "djia_core_names"
 category = "hard"
-pattern = "(?i)\b(djia|dow jones|the dow)\b"
+pattern = "(?i)\\b(djia|dow jones|the dow)\\b"
 
 [[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
-pattern = "(?i)\bpowell\b"
-near = { pattern = "(?i)\b(fed|fomc|rates?)\b", window = 6 }
+pattern = "(?i)\\bpowell\\b"
+near = { pattern = "(?i)\\b(fed|fomc|rates?)\\b", window = 6 }
 
 [[blockers]]
 id = "dji_drones"
-pattern = "(?i)\bdji\b"
-near = { pattern = "(?i)\b(drone|mavic|gimbal)\b", window = 4 }
+pattern = "(?i)\\bdji\\b"
+near = { pattern = "(?i)\\b(drone|mavic|gimbal)\\b", window = 4 }
 
 [[combos.pass_any]]
 need = ["macro","hard"]
@@ -176,144 +183,71 @@ need = ["macro","hard"]
 ---
 
 ## Phase 4 – AI Integration (optional)
+[... unchanged in this snippet ...]
 
-### Overview
-- AI is only called **sometimes**, on borderline or ambiguous decisions.  
-- Responses include both **headers** and **JSON fields** indicating AI usage.  
-- AI calls are cached per input hash in `cache/ai/` and limited daily.
+---
 
-### Config
-File: `config/ai.json`
-```json
-{
-  "enabled": true,
-  "provider": "openai",
-  "daily_limit": 50
-}
-```
+## Notifications (Phase 5)
 
-Environment variables:
-| Variable              | Default | Meaning                                |
-|-----------------------|---------|----------------------------------------|
-| `OPENAI_API_KEY`      | none    | API key for provider (e.g. OpenAI)     |
-| `AI_SOURCES`          | all     | Sources allowed for AI use             |
-| `AI_ONLY_TOP_SOURCES` | true    | Restrict AI to top-weighted sources    |
-| `AI_SCORE_BAND`       | 0.08    | Only borderline decisions trigger AI   |
+### What gets notified
+- **Decision changes** (`BUY ↔ SELL`, `HOLD` transitions) are the trigger.
+- **Antiflutter** (cooldown) prevents spam during short-term oscillations.  
+  First alert after a quiet period always passes; inside cooldown, alerts are suppressed.
 
-### Response format
-Headers:
-- `X-AI-Used: 1|0` *(sometimes `yes|no` depending on build; this project uses `1|0`)*
-- `X-AI-Reason: <short sanitized reason>` *(present only if AI contributed)*
+### Channels
+- **Slack** via webhook (`SLACK_WEBHOOK_URL`)
+- **Discord** via webhook (`DISCORD_WEBHOOK_URL`)
+- **Email** (optional) gated by `EMAIL_ENABLED` (module present; real delivery optional)
 
-JSON field `ai`:
-```json
-"ai": {
-  "used": true,
-  "reason": "AI short summary",
-  "cache_hit": false,
-  "limited": false
-}
+### Change Detector
+The change detector polls your decision endpoint and emits alerts when a disruptive change is observed **and** antiflutter allows it.
+
+- Code: `src/change_detector.rs`
+- State persistence: `state/last_decision.json`
+
+**Background loop**
+```rust
+dow_sentiment_analyzer::change_detector::run_change_detector_loop().await?;
 ```
 
-### Examples
+**Environment**
+| Variable               | Default                            | Purpose                          |
+|------------------------|------------------------------------|----------------------------------|
+| `DECIDE_URL`           | `http://127.0.0.1:8000/api/decide` | Endpoint to poll for decisions   |
+| `NOTIFY_INTERVAL_SECS` | `15`                               | Polling interval (seconds)       |
+| `NOTIFY_COOLDOWN_MIN`  | `180`                              | Antiflutter cooldown in minutes  |
+| `SLACK_WEBHOOK_URL`    | *(unset)*                          | Slack channel incoming webhook   |
+| `DISCORD_WEBHOOK_URL`  | *(unset)*                          | Discord channel incoming webhook |
+| `EMAIL_ENABLED`        | `false`                            | Enable email notifications       |
+| `APP_PUBLIC_URL`       | `https://example.com`              | Link included in messages        |
 
-#### Borderline case → AI call
-```bash
-curl -i -X POST http://localhost:8000/api/decide   -H "Content-Type: application/json"   -d '[{"source":"Fed","text":"Powell hints at uncertainty"}]'
-```
-Response headers (example):
-```
-X-AI-Used: 1
-X-AI-Reason: borderline clarified by AI
-```
-Response JSON includes:
-```json
-"ai": { "used": true, "reason": "borderline clarified by AI", "cache_hit": false, "limited": false }
-```
-
-#### Cache hit
-Send the **same** request again. The response JSON shows:
-```json
-"ai": { "used": true, "cache_hit": true }
-```
-
-#### Disabled AI
-```bash
-export AI_ENABLED=0
-curl -i -X POST http://localhost:8000/api/decide   -H "Content-Type: application/json"   -d '[{"source":"Fed","text":"Powell says the Fed may cut rates; Dow Jones futures slip"}]'
-```
-Response headers:
-```
-X-AI-Used: 0
-```
-Response JSON:
-```json
-"ai": { "used": false, "limited": false }
-```
-
-> **Windows / PowerShell equivalents:**
+> **Windows / PowerShell (examples):**
 > ```powershell
-> $body = '[{"source":"Fed","text":"Powell hints at uncertainty"}]'
-> Invoke-WebRequest -Method POST -Uri "http://127.0.0.1:8000/api/decide" `
->   -ContentType "application/json" -Body $body -UseBasicParsing | % Headers
-> Invoke-RestMethod  -Method POST -Uri "http://127.0.0.1:8000/api/decide" `
->   -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 6
+> $env:DECIDE_URL = "http://127.0.0.1:8000/api/decide"
+> $env:NOTIFY_INTERVAL_SECS = "15"
+> $env:NOTIFY_COOLDOWN_MIN  = "180"
+> $env:SLACK_WEBHOOK_URL    = "XXXXXXXXXX"
+> $env:DISCORD_WEBHOOK_URL  = "XXXXXXXXXX"
+> cargo shuttle run
 > ```
-> If you hit `400 Bad Request` with `curl` in PowerShell, prefer `Invoke-WebRequest`/`Invoke-RestMethod` or use `curl.exe --data-binary`.
 
----
+### Antiflutter
+Module: `src/notify/antiflutter.rs`  
+- Cooldown-based suppression; first alert always passes.  
+- Unified `DecisionKind` (`BUY/SELL/HOLD/TEST`) lives in `src/notify/mod.rs`.
 
-## AI integration tests (mock)
+### Test Scenarios (Phase 5)
+Standalone tests validate antiflutter behavior and change detection logic.
 
-Run the local server and tests in mock mode:
-
-```powershell
-$env:AI_TEST_MODE = "mock"
-$env:SHUTTLE_ENV = "local"
-cargo shuttle run
+Run:
+```bash
+cargo test --tests
 ```
 
-In another terminal:
-
-```powershell
-$env:AI_TEST_MODE = "mock"
-cargo test --test ai_integration -- --ignored --nocapture
-```
-
-> Full suite including ignored: `cargo test -- --include-ignored`
-
----
-
-## Real AI calls locally (no commits, env-only)
-
-```powershell
-Remove-Item Env:AI_TEST_MODE -ErrorAction SilentlyContinue
-$env:OPENAI_API_KEY = "XXXXXXXXXX"
-$env:SHUTTLE_ENV   = "local"
-cargo shuttle run
-```
-
-Verify headers:
-
-```powershell
-curl http://127.0.0.1:8000/api/decide `
-  -Method POST `
-  -Body '{ "text": "Fed hints at cuts; labor market cools" }' `
-  -ContentType "application/json" -i
-```
-
-Cleanup:
-
-```powershell
-Remove-Item Env:OPENAI_API_KEY
-```
-
----
-
-## CI
-
-- GH Actions runs `fmt`, `clippy -D warnings`, and fast tests (`cargo test`) on PRs and `main`.
-- AI integration tests are excluded from CI by default (they require a running local server).
+They cover:
+- First decision → sends exactly once.
+- Quick oscillation inside cooldown → suppressed.
+- After cooldown → next change is sent.
 
 ---
 
@@ -325,12 +259,3 @@ Remove-Item Env:OPENAI_API_KEY
 
 ## Contributing
 Open an Issue with `feat:` or `bug:` prefix; PRs welcome.
-
----
-
-## Notifications
-
-- **Slack**: configurable webhook via `SLACK_WEBHOOK_URL`
-- **Discord**: configurable webhook via `DISCORD_WEBHOOK_URL`
-
-[![Security audit](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/audit.yml/badge.svg)](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/audit.yml)

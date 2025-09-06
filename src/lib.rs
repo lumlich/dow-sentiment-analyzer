@@ -15,11 +15,21 @@ pub mod source_weights;
 // Phase 3 analysis pipeline (NER, rerank, antispam, weights, rules, scoring, debug)
 pub mod analyze;
 
+// Phase 5 notifications & background jobs
+pub mod change_detector;
+pub mod notify;
+// NOTE: Removed `pub mod antiflutter;` — antiflutter now lives under `notify::antiflutter`.
+
 // ---- Re-exports for stable public API ----
 // Back-compat for tests expecting `crate_root::ai_adapter::...`
 pub use analyze::ai_adapter;
 // Pohodlný přístup k sestavení routeru: `crate_root::api::router` i `crate_root::router`
 pub use crate::api::router;
+
+// Re-export notification types for easy use in bins/tests
+pub use crate::notify::{DecisionKind, NotificationEvent, NotifierMux};
+// Make AntiFlutter reachable at crate root for convenience:
+pub use crate::notify::antiflutter::AntiFlutter;
 
 pub mod ai_bootstrap;
 

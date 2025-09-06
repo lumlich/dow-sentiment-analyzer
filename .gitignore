@@ -1,50 +1,40 @@
-# Rust
+# ── Rust
 /target
 **/*.rs.bk
 
-# Cargo
-# Keep Cargo.lock tracked (do NOT ignore).
-
-# OS
+# ── OS
 .DS_Store
 Thumbs.db
 
-# IDE / Editor
+# ── IDE / Editor
 .vscode/
 .idea/
 
-# Logs & temp
+# ── Logs & temp
 *.log
 *.tmp
-
-# Shuttle
-# Keep .shuttle/ tracked (contains config), do NOT ignore it.
-Secrets*.toml
-
-# Environment files
-.env
-.env.*
-
-# AI cache
-cache/ai/
-cache/ai/*
-!cache/.gitkeep
-
-# Frontend (Vite/Node)
-ui/node_modules/
-ui/dist/
-
-# Node logs (if any)
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Environment files
+# ── Shuttle
+# (Secrets pro lokál ignoruj; .shuttle/ nech klidně trackované)
+Secrets*.toml
+!Secrets.example.toml
+
+# ── Env files (root i /ui)
 .env
 .env.*
+!*.example
+!ui/.env.example
 
-# AI cache
+# ── Frontend (Vite/Node)
+ui/node_modules/
+ui/dist/
+ui/.vite/
+ui/.cache/
+
+# ── AI cache (pokud používáš)
 cache/ai/
-cache/ai/*
-.env
+!cache/.gitkeep

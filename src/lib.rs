@@ -16,9 +16,9 @@ pub mod source_weights;
 pub mod analyze;
 
 // Phase 5 notifications & background jobs
-pub mod notify;
 pub mod change_detector;
-pub mod antiflutter;
+pub mod notify;
+// NOTE: Removed `pub mod antiflutter;` — antiflutter now lives under `notify::antiflutter`.
 
 // ---- Re-exports for stable public API ----
 // Back-compat for tests expecting `crate_root::ai_adapter::...`
@@ -28,6 +28,8 @@ pub use crate::api::router;
 
 // Re-export notification types for easy use in bins/tests
 pub use crate::notify::{DecisionKind, NotificationEvent, NotifierMux};
+// Make AntiFlutter reachable at crate root for convenience:
+pub use crate::notify::antiflutter::AntiFlutter;
 
 pub mod ai_bootstrap;
 

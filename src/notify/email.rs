@@ -16,10 +16,8 @@ impl EmailSender {
         let host = std::env::var("SMTP_HOST").expect("SMTP_HOST missing");
         let user = std::env::var("SMTP_USER").expect("SMTP_USER missing");
         let pass = std::env::var("SMTP_PASS").expect("SMTP_PASS missing");
-        let from_addr =
-            std::env::var("NOTIFY_EMAIL_FROM").expect("NOTIFY_EMAIL_FROM missing");
-        let to_addr =
-            std::env::var("NOTIFY_EMAIL_TO").expect("NOTIFY_EMAIL_TO missing");
+        let from_addr = std::env::var("NOTIFY_EMAIL_FROM").expect("NOTIFY_EMAIL_FROM missing");
+        let to_addr = std::env::var("NOTIFY_EMAIL_TO").expect("NOTIFY_EMAIL_TO missing");
 
         let creds = Credentials::new(user, pass);
         let mailer = AsyncSmtpTransport::<Tokio1Executor>::relay(&host)
@@ -39,7 +37,7 @@ impl EmailSender {
             "Decision: {:?}\nConfidence: {:.2}\nTop reason: {}\nTimestamp: {}\n",
             ev.decision,
             ev.confidence,
-            ev.reasons.get(0).cloned().unwrap_or_default(),
+            ev.reasons.first().cloned().unwrap_or_default(),
             ev.ts.to_rfc3339()
         );
 

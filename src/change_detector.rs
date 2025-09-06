@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::{fs, time};
 
-use crate::antiflutter::AntiFlutter;
+use crate::notify::antiflutter::AntiFlutter;
 use crate::notify::{DecisionKind, NotificationEvent, NotifierMux};
 
 const STATE_PATH: &str = "state/last_decision.json";
@@ -52,12 +52,16 @@ fn map_decision(s: &str) -> DecisionKind {
 
 fn map_any(any: DecideAny) -> (DecisionKind, f32, Vec<String>) {
     match any {
-        DecideAny::Flat(DecideResponseFlat { decision, confidence, reasons }) => {
-            (map_decision(&decision), confidence, reasons)
-        }
-        DecideAny::Alt(DecideResponseAlt { verdict, score, reasons }) => {
-            (map_decision(&verdict), score, reasons)
-        }
+        DecideAny::Flat(DecideResponseFlat {
+            decision,
+            confidence,
+            reasons,
+        }) => (map_decision(&decision), confidence, reasons),
+        DecideAny::Alt(DecideResponseAlt {
+            verdict,
+            score,
+            reasons,
+        }) => (map_decision(&verdict), score, reasons),
         DecideAny::Wrapped { data } => map_any(*data),
     }
 }
@@ -93,9 +97,7 @@ async fn write_state(s: &LastState) {
     if let Err(e) = fs::create_dir_all("state").await {
         tracing::warn!("state dir: {e:#}");
     }
-    if let Err(e) =
-        fs::write(STATE_PATH, serde_json::to_vec_pretty(s).unwrap_or_default()).await
-    {
+    if let Err(e) = fs::write(STATE_PATH, serde_json::to_vec_pretty(s).unwrap_or_default()).await {
         tracing::warn!("write state: {e:#}");
     }
 }

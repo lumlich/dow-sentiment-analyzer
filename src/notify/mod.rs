@@ -1,6 +1,7 @@
+pub mod antiflutter;
 pub mod discord;
-pub mod slack;
 pub mod email;
+pub mod slack; // module exists at src/notify/antiflutter.rs
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -13,6 +14,7 @@ pub enum DecisionKind {
     BUY,
     SELL,
     HOLD,
+    #[cfg(test)] // keep TEST only for test builds to avoid dead_code warnings in CI
     TEST,
 }
 
@@ -50,15 +52,21 @@ impl Notifier for SlackNotifier {
             tracing::debug!("Slack disabled (no SLACK_WEBHOOK_URL)");
             return Ok(());
         };
+        let reason = ev.reasons.first().cloned().unwrap_or_default();
         let text = format!(
             "*DJI alert:* *{:?}* ({:.2})\nReason: {}\n@ {}",
             ev.decision,
             ev.confidence,
-            ev.reasons.get(0).cloned().unwrap_or_default(),
+            reason,
             ev.ts.to_rfc3339()
         );
         let body = serde_json::json!({ "text": text });
-        self.client.post(url).json(&body).send().await?.error_for_status()?;
+        self.client
+            .post(url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 }
@@ -83,15 +91,21 @@ impl Notifier for DiscordNotifier {
             tracing::debug!("Discord disabled (no DISCORD_WEBHOOK_URL)");
             return Ok(());
         };
+        let reason = ev.reasons.first().cloned().unwrap_or_default();
         let content = format!(
             "**DJI alert:** **{:?}** ({:.2})\nReason: {}\n{}",
             ev.decision,
             ev.confidence,
-            ev.reasons.get(0).cloned().unwrap_or_default(),
+            reason,
             ev.ts.to_rfc3339()
         );
         let body = serde_json::json!({ "content": content });
-        self.client.post(url).json(&body).send().await?.error_for_status()?;
+        self.client
+            .post(url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 }
@@ -107,7 +121,11 @@ impl EmailNotifier {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
         Self {
-            inner: if enabled { Some(email::EmailSender::from_env()) } else { None },
+            inner: if enabled {
+                Some(email::EmailSender::from_env())
+            } else {
+                None
+            },
         }
     }
 }
@@ -129,10 +147,11 @@ pub struct NotifierMux {
 }
 impl NotifierMux {
     pub fn from_env() -> Self {
-        let mut v: Vec<Box<dyn Notifier>> = Vec::new();
-        v.push(Box::new(SlackNotifier::from_env()));
-        v.push(Box::new(DiscordNotifier::from_env()));
-        v.push(Box::new(EmailNotifier::from_env()));
+        let v: Vec<Box<dyn Notifier>> = vec![
+            Box::new(SlackNotifier::from_env()),
+            Box::new(DiscordNotifier::from_env()),
+            Box::new(EmailNotifier::from_env()),
+        ];
         Self { notifiers: v }
     }
     pub async fn notify(&self, ev: &NotificationEvent) {

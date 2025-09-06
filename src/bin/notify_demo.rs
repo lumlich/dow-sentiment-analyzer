@@ -1,7 +1,7 @@
 //! Demo that simulates a few events through the multiplexer (stdout/log only when channels disabled).
 
 use chrono::Utc;
-use dow_sentiment_analyzer::{DecisionKind, NotifierMux, NotificationEvent};
+use dow_sentiment_analyzer::{DecisionKind, NotificationEvent, NotifierMux};
 
 #[tokio::main]
 async fn main() {

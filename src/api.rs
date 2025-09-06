@@ -157,7 +157,10 @@ pub fn router(state_from_main: RelevanceAppState) -> Router<()> {
             .route("/debug/history", get(debug_history))
             .route("/debug/last-decision", get(debug_last_decision))
             .route("/debug/source-weight", get(debug_source_weight))
-            .route("/admin/reload-source-weights", get(admin_reload_source_weights));
+            .route(
+                "/admin/reload-source-weights",
+                get(admin_reload_source_weights),
+            );
     }
 
     r.layer(cors)

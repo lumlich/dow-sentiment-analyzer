@@ -45,7 +45,7 @@ impl Notifier for DiscordNotifier {
             "**DJI alert:** **{:?}** ({:.2})\nReason: {}\n{}",
             ev.decision,
             ev.confidence,
-            ev.reasons.get(0).cloned().unwrap_or_default(),
+            ev.reasons.first().cloned().unwrap_or_default(),
             ev.ts.to_rfc3339()
         );
         let body = serde_json::json!({ "content": content });

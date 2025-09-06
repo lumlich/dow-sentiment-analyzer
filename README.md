@@ -234,7 +234,10 @@ dow_sentiment_analyzer::change_detector::run_change_detector_loop().await?;
 > cargo shuttle run
 > ```
 
----
+### Antiflutter
+Module: `src/notify/antiflutter.rs`  
+- Cooldown-based suppression; first alert always passes.  
+- Unified `DecisionKind` (`BUY/SELL/HOLD/TEST`) lives in `src/notify/mod.rs`.
 
 ## Small Env Snippets (Phase 5 follow‑up)
 

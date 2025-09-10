@@ -190,6 +190,11 @@ need = ["macro","hard"]
 
 ---
 
+## Phase 4 – AI Integration (optional)
+[... unchanged in this snippet ...]
+
+---
+
 ## Notifications (Phase 5)
 
 ### What gets notified
@@ -234,7 +239,23 @@ dow_sentiment_analyzer::change_detector::run_change_detector_loop().await?;
 > cargo shuttle run
 > ```
 
----
+### Antiflutter
+Module: `src/notify/antiflutter.rs`  
+- Cooldown-based suppression; first alert always passes.  
+- Unified `DecisionKind` (`BUY/SELL/HOLD/TEST`) lives in `src/notify/mod.rs`.
+
+### Test Scenarios (Phase 5)
+Standalone tests validate antiflutter behavior and change detection logic.
+
+Run:
+```bash
+cargo test --tests
+```
+
+They cover:
+- First decision → sends exactly once.
+- Quick oscillation inside cooldown → suppressed.
+- After cooldown → next change is sent.
 
 ## Small Env Snippets (Phase 5 follow‑up)
 

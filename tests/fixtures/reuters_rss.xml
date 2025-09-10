@@ -1,0 +1,17 @@
+<rss version="2.0">
+  <channel>
+    <title>Reuters Business News</title>
+    <item>
+      <title>Stocks fall as yields rise</title>
+      <link>https://example.test/reuters/stocks</link>
+      <pubDate>Mon, 01 Sep 2025 12:05:00 GMT</pubDate>
+      <description>Wall Street slipped on Monday as Treasury yields ticked higher.</description>
+    </item>
+    <item>
+      <title>Fed watchers eye next move</title>
+      <link>https://example.test/reuters/fed-watch</link>
+      <pubDate>Mon, 01 Sep 2025 12:15:00 GMT</pubDate>
+      <description>Analysts expect rates to remain unchanged this month.</description>
+    </item>
+  </channel>
+</rss>

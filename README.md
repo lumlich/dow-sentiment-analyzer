@@ -120,6 +120,24 @@ We use cargo aliases (see `.cargo/config.toml`) for convenience:
 
 ---
 
+## Strict Metrics Test (feature-gated)
+
+A stricter ingest metrics test is available behind an optional Cargo feature. By default, it **does not** compile nor run so your local and CI suites stay green.
+
+- Run default suite:
+```bash
+cargo test
+```
+
+- Run with strict metrics enabled:
+```bash
+cargo test --features strict-metrics
+```
+
+CI tip: you can add an optional job in your workflow to run the strict test without blocking the main CI.
+
+---
+
 ## Relevance Gate
 
 ### What it does
@@ -172,21 +190,6 @@ need = ["macro","hard"]
 
 ---
 
-## Phase 2 – Frontend UI
-[... unchanged ...]
-
----
-
-## Phase 3 – Contextual rules (AI-ready design)
-[... unchanged ...]
-
----
-
-## Phase 4 – AI Integration (optional)
-[... unchanged in this snippet ...]
-
----
-
 ## Notifications (Phase 5)
 
 ### What gets notified
@@ -231,23 +234,21 @@ dow_sentiment_analyzer::change_detector::run_change_detector_loop().await?;
 > cargo shuttle run
 > ```
 
-### Antiflutter
-Module: `src/notify/antiflutter.rs`  
-- Cooldown-based suppression; first alert always passes.  
-- Unified `DecisionKind` (`BUY/SELL/HOLD/TEST`) lives in `src/notify/mod.rs`.
+---
 
-### Test Scenarios (Phase 5)
-Standalone tests validate antiflutter behavior and change detection logic.
+## Small Env Snippets (Phase 5 follow‑up)
 
-Run:
+For local tinkering scripts/crons:
 ```bash
-cargo test --tests
+export DECIDE_ENDPOINT="http://127.0.0.1:8000/api/decide"
+export CHECK_INTERVAL_SECS="15"
 ```
 
-They cover:
-- First decision → sends exactly once.
-- Quick oscillation inside cooldown → suppressed.
-- After cooldown → next change is sent.
+On Windows PowerShell:
+```powershell
+$env:DECIDE_ENDPOINT = "http://127.0.0.1:8000/api/decide"
+$env:CHECK_INTERVAL_SECS = "15"
+```
 
 ---
 

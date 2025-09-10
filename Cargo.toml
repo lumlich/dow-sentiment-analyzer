@@ -17,7 +17,7 @@ path = "src/lib.rs"
 # Async runtime
 tokio = { version = "1.47", features = ["full"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 sha2 = "0.10"
 dotenvy = "0.15"
 strsim = "0.10"
@@ -39,8 +39,15 @@ regex = "1.11.2"
 anyhow = "1.0.99"
 toml = "0.9.5"
 
-# Date/time (for UTC timestamps in notifications)
+# Date/time
 chrono = { version = "0.4", features = ["clock", "serde"] }
+time = { version = "0.3", features = ["parsing", "formatting"] }
+
+# Text/HTML normalization
+html-escape = "0.2"
+
+# RSS/XML parsing
+quick-xml = { version = "0.36", features = ["serialize"] }
 
 # Shuttle (deployment runtime + Axum integration)
 shuttle-runtime = "0.56.0"
@@ -52,9 +59,16 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 # Email (SMTP) for notifications
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
 
+# --- Metrics / Prometheus ---
+metrics = "0.23"
+metrics-macros = "0.7"
+metrics-util = "0.16"
+metrics-exporter-prometheus = "0.14"
+
 [features]
 default = []
 debug = []
+strict-metrics = []
 
 [dev-dependencies]
 # Testing & utilities

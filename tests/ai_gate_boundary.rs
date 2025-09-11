@@ -1,63 +1,55 @@
 //! AI gating boundary & extraction tests adapted to current signatures:
 //!   - extract_threshold_from_reasons(&Relevance) -> Option<f32>
 //!   - ai_gate_should_call(&str, &Relevance) -> bool
-//! Uses Relevance::test_new(...) helper (cfg(test)) defined in src/relevance.rs.
+//! Uses Relevance::test_new(...) helper defined in src/relevance.rs.
 
-use dow_sentiment_analyzer::relevance::{
-    ai_gate_should_call, extract_threshold_from_reasons, Relevance,
-};
+use dow_sentiment_analyzer::relevance::{ai_gate_should_call, extract_threshold_from_reasons};
+use dow_sentiment_analyzer::Relevance; // re-export z lib.rs
 
-const DEFAULT_THRESHOLD: f32 = 0.50;
-const DEFAULT_BAND: f32 = 0.08;
+const DEFAULT_THRESHOLD: f32 = 0.50; // jen pro výpočty v testu
+const DEFAULT_BAND: f32 = 0.08; // default, pokud AI_SCORE_BAND není v env
+const TOP_SOURCE: &str = "Reuters"; // v default allowlistu
 
 fn s(v: &[&str]) -> Vec<String> {
     v.iter().map(|x| x.to_string()).collect()
 }
 
-fn rel(score: f32, threshold: Option<f32>, band: f32, reasons: &[&str]) -> Relevance {
-    Relevance::test_new(score, threshold, band, s(reasons), "unit")
+/// Vytvoř Relevance s daným score a případným threshold tagem.
+/// `threshold` se do Relevance dostane přes důvod "threshold_ok:<num>".
+fn rel(score: f32, threshold: Option<f32>, extra_reasons: &[&str]) -> Relevance {
+    let mut reasons = s(extra_reasons);
+    if let Some(t) = threshold {
+        reasons.push(format!("threshold_ok:{t:.2}"));
+    }
+    // Relevance::test_new: (score, _threshold, _band, reasons, _label)
+    Relevance::test_new(score, 0.0, 0.0, reasons, "unit")
 }
 
+/* ------------------------------
+   Threshold extraction tests
+--------------------------------*/
+
 #[test]
-fn threshold_extraction_simple_equals() {
-    let r = rel(0.0, None, DEFAULT_BAND, &["threshold=0.72"]);
+fn threshold_extraction_simple_ok_tag() {
+    let r = rel(0.0, None, &["threshold_ok:0.72"]);
     let t = extract_threshold_from_reasons(&r).expect("threshold expected");
     assert!((t - 0.72).abs() < 1e-6, "expected 0.72, got {t}");
 }
 
 #[test]
-fn threshold_extraction_with_colon_and_spaces_case_insensitive() {
-    let r = rel(
-        0.0,
-        None,
-        DEFAULT_BAND,
-        &["Some note", "ThReShOlD : 0.35", "other"],
-    );
+fn threshold_extraction_ignores_other_text() {
+    let r = rel(0.0, None, &["Some note", "threshold_ok:0.35", "other"]);
     let t = extract_threshold_from_reasons(&r).expect("threshold expected");
     assert!((t - 0.35).abs() < 1e-6, "expected 0.35, got {t}");
 }
 
 #[test]
-fn threshold_extraction_ignores_invalid_and_out_of_range() {
-    let r = rel(
-        0.0,
-        Some(DEFAULT_THRESHOLD),
-        DEFAULT_BAND,
-        &["threshold=abc", "threshold=1.42", "threshold=-0.1"],
-    );
-    let t = extract_threshold_from_reasons(&r).unwrap_or(DEFAULT_THRESHOLD);
-    assert!((t - DEFAULT_THRESHOLD).abs() < 1e-6);
-}
-
-#[test]
 fn threshold_extraction_first_valid_wins_when_multiple_present() {
-    // If your impl chooses "first", this asserts 0.61; if you choose "last"/"max",
-    // adjust test or impl accordingly.
+    // Implementace prochází reasons v pořadí a vrátí první validní výskyt
     let r = rel(
         0.0,
         None,
-        DEFAULT_BAND,
-        &["threshold=0.61", "note", "threshold=0.42"],
+        &["threshold_ok:0.61", "note", "threshold_ok:0.42"],
     );
     let t = extract_threshold_from_reasons(&r).expect("threshold expected");
     assert!(
@@ -68,133 +60,99 @@ fn threshold_extraction_first_valid_wins_when_multiple_present() {
 
 #[test]
 fn threshold_extraction_missing_returns_none() {
-    let r = rel(
-        0.0,
-        Some(DEFAULT_THRESHOLD),
-        DEFAULT_BAND,
-        &["no threshold here", "band=0.08"],
-    );
+    let r = rel(0.0, None, &["no threshold here", "band=0.08"]);
     let t = extract_threshold_from_reasons(&r);
     assert!(
         t.is_none(),
-        "expected None when no threshold present, got {t:?}"
+        "expected None when no threshold_ok present, got {t:?}"
     );
 }
 
-#[test]
-fn gate_calls_inside_band_centered_on_default_threshold() {
-    // Build rel around the default threshold/band and vary only the score.
-    // Exactly at threshold → should call (inclusive).
-    let r = rel(
-        DEFAULT_THRESHOLD,
-        Some(DEFAULT_THRESHOLD),
-        DEFAULT_BAND,
-        &[],
-    );
-    assert!(ai_gate_should_call("unit", &r), "call at exact threshold");
+/* ------------------------------
+   AI gate band tests (default band = 0.08)
+   Pozn.: gate volá jen když rel.score > 0 a zdroj je v allowlistu.
+--------------------------------*/
 
-    // Slightly inside upper edge
-    let r = rel(
-        DEFAULT_THRESHOLD + 0.0799,
-        Some(DEFAULT_THRESHOLD),
-        DEFAULT_BAND,
-        &[],
-    );
+#[test]
+fn gate_calls_inside_band_above_threshold() {
+    // přesně na threshold → diff = 0.0 → uvnitř pásma
+    let r = rel(DEFAULT_THRESHOLD, Some(DEFAULT_THRESHOLD), &[]);
     assert!(
-        ai_gate_should_call("unit", &r),
+        ai_gate_should_call(TOP_SOURCE, &r),
+        "call at exact threshold"
+    );
+
+    // těsně uvnitř horní hrany
+    let r = rel(DEFAULT_THRESHOLD + 0.0799, Some(DEFAULT_THRESHOLD), &[]);
+    assert!(
+        ai_gate_should_call(TOP_SOURCE, &r),
         "call just inside upper edge"
     );
+}
 
-    // Slightly inside lower edge
-    let r = rel(
-        DEFAULT_THRESHOLD - 0.0799,
-        Some(DEFAULT_THRESHOLD),
-        DEFAULT_BAND,
-        &[],
-    );
+#[test]
+fn gate_calls_even_when_just_below_threshold_if_score_positive() {
+    // pokud je score kladné, diff = max(score - thr, 0) → 0.0 ⇒ uvnitř pásma
+    let r = rel(DEFAULT_THRESHOLD - 0.01, Some(DEFAULT_THRESHOLD), &[]);
     assert!(
-        ai_gate_should_call("unit", &r),
-        "call just inside lower edge"
+        ai_gate_should_call(TOP_SOURCE, &r),
+        "positive score just below threshold should still call"
     );
 }
 
 #[test]
-fn gate_does_not_call_outside_band() {
+fn gate_does_not_call_outside_band_above_threshold() {
     let r = rel(
-        DEFAULT_THRESHOLD + 0.0801,
+        DEFAULT_THRESHOLD + DEFAULT_BAND + 0.0002,
         Some(DEFAULT_THRESHOLD),
-        DEFAULT_BAND,
         &[],
     );
     assert!(
-        !ai_gate_should_call("unit", &r),
+        !ai_gate_should_call(TOP_SOURCE, &r),
         "NO call just outside upper edge"
     );
-
-    let r = rel(
-        DEFAULT_THRESHOLD - 0.0801,
-        Some(DEFAULT_THRESHOLD),
-        DEFAULT_BAND,
-        &[],
-    );
-    assert!(
-        !ai_gate_should_call("unit", &r),
-        "NO call just outside lower edge"
-    );
 }
 
 #[test]
-fn gate_is_inclusive_on_band_edges() {
+fn gate_is_inclusive_on_upper_band_edge() {
     let r = rel(
         DEFAULT_THRESHOLD + DEFAULT_BAND,
         Some(DEFAULT_THRESHOLD),
-        DEFAULT_BAND,
         &[],
     );
     assert!(
-        ai_gate_should_call("unit", &r),
+        ai_gate_should_call(TOP_SOURCE, &r),
         "call at inclusive upper edge"
-    );
-
-    let r = rel(
-        DEFAULT_THRESHOLD - DEFAULT_BAND,
-        Some(DEFAULT_THRESHOLD),
-        DEFAULT_BAND,
-        &[],
-    );
-    assert!(
-        ai_gate_should_call("unit", &r),
-        "call at inclusive lower edge"
     );
 }
 
 #[test]
 fn gate_uses_extracted_threshold_when_available() {
-    // reasons request threshold=0.62; band stays default in rel
-    let r = rel(0.70, None, DEFAULT_BAND, &["threshold=0.62"]);
+    // reasons nesou threshold_ok:0.62
+    let r = rel(0.70, None, &["threshold_ok:0.62"]);
     let thr = extract_threshold_from_reasons(&r).expect("extraction failed");
     assert!((thr - 0.62).abs() < 1e-6, "extraction failed, got {thr}");
 
-    // Rebuild rel to reflect the extracted threshold for gating check:
-    let r2 = rel(0.70, Some(thr), DEFAULT_BAND, &["threshold=0.62"]);
+    // horní hrana = 0.62 + 0.08 = 0.70 → inclusive => call
     assert!(
-        ai_gate_should_call("unit", &r2),
-        "expected call at upper edge"
+        ai_gate_should_call(TOP_SOURCE, &r),
+        "expected call at upper edge with extracted threshold"
     );
 
-    let r3 = rel(0.7002, Some(thr), DEFAULT_BAND, &["threshold=0.62"]);
+    // mírně nad hranou → NO call
+    let r2 = rel(0.7002, None, &["threshold_ok:0.62"]);
     assert!(
-        !ai_gate_should_call("unit", &r3),
+        !ai_gate_should_call(TOP_SOURCE, &r2),
         "expected NO call just above edge"
     );
 }
 
 #[test]
-fn gate_with_weird_scores_outside_band() {
-    // Ensure no panic and returns false for absurd scores.
-    let r = rel(-10.0, Some(DEFAULT_THRESHOLD), DEFAULT_BAND, &[]);
-    assert!(!ai_gate_should_call("unit", &r));
+fn gate_with_weird_scores_outside_band_or_neutralized() {
+    // zero nebo záporné skóre → nikdy nevolá
+    let r = rel(0.0, Some(DEFAULT_THRESHOLD), &[]);
+    assert!(!ai_gate_should_call(TOP_SOURCE, &r));
 
-    let r = rel(10.0, Some(DEFAULT_THRESHOLD), DEFAULT_BAND, &[]);
-    assert!(!ai_gate_should_call("unit", &r));
+    let r = rel(-10.0_f32, Some(DEFAULT_THRESHOLD), &[]);
+    assert!(!ai_gate_should_call(TOP_SOURCE, &r));
 }

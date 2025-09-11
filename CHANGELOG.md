@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Full test compatibility with `rand 0.9`; removed warnings and deprecated calls.
 
+## [v0.3.1] - 2025-09-11
+### Changed
+- Metrics: configured real Prometheus **histogram** for `ai_decision_duration_ms` by setting explicit buckets via `PrometheusBuilder.set_buckets_for_metric(Matcher::Full(...))`. Exposition now includes `*_bucket`, `*_sum`, `*_count`.
+- Metrics API alignment to `metrics = 0.24.x`: switched to new macros (`counter!(...).increment(n)`, `histogram!(...).record(x)`, `gauge!(...).set(x)`).
+
+### Fixed
+- Replaced `Reason::Threshold` with `ReasonKind::Threshold` to match `decision.rs` and eliminate build errors.
+- All test suites green (API, cache, AI gate, ingest, metrics).
+
 ## [v0.3.0] - 2025-08-27
 ### Added
 - Contextual rules (Phase 3):

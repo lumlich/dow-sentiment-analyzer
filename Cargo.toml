@@ -8,7 +8,6 @@ authors = ["Lumir Lichy <lumlich@lumlich.com>"]
 repository = "https://github.com/lumlich/dow-sentiment-analyzer"
 readme = "README.md"
 
-# 👇 Explicit lib target so cargo/RA know the crate root for re-exports
 [lib]
 name = "dow_sentiment_analyzer"
 path = "src/lib.rs"
@@ -17,16 +16,17 @@ path = "src/lib.rs"
 # Async runtime
 tokio = { version = "1.47", features = ["full"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 sha2 = "0.10"
 dotenvy = "0.15"
 strsim = "0.10"
 async-trait = "0.1"
+dashmap = "5.5"
 
-# Web framework (PIN to avoid axum 0.8 pulling in parallel)
+# Web framework
 axum = { version = "0.8.4", features = ["macros"] }
 
-# HTTP extensions (CORS + static files for UI)
+# HTTP extensions
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 
 # Serialization
@@ -39,25 +39,37 @@ regex = "1.11.2"
 anyhow = "1.0.99"
 toml = "0.9.5"
 
-# Date/time (for UTC timestamps in notifications)
+# Date/time
 chrono = { version = "0.4", features = ["clock", "serde"] }
+time = { version = "0.3", features = ["parsing", "formatting"] }
 
-# Shuttle (deployment runtime + Axum integration)
+# Text/HTML normalization
+html-escape = "0.2"
+
+# RSS/XML parsing
+quick-xml = { version = "0.36", features = ["serialize"] }
+
+# Shuttle
 shuttle-runtime = "0.56.0"
 shuttle-axum = "0.56.0"
 
-# External API calls (OpenAI/Claude etc., and Discord/Slack webhooks)
+# External API
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 
-# Email (SMTP) for notifications
+# Email
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
+
+# --- Metrics / Prometheus (UNIFIED on metrics 0.24) ---
+metrics = "0.24"
+metrics-util = "0.18"
+metrics-exporter-prometheus = "0.17.2"
 
 [features]
 default = []
 debug = []
+strict-metrics = []
 
 [dev-dependencies]
-# Testing & utilities
 rand = "0.9"
 tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

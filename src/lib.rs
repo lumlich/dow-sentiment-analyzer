@@ -7,10 +7,13 @@ pub mod decision;
 pub mod disruption;
 pub mod engine;
 pub mod history;
+pub mod ingest;
+pub mod metrics;
 pub mod relevance;
 pub mod rolling;
 pub mod sentiment;
 pub mod source_weights;
+pub use relevance::Relevance;
 
 // Phase 3 analysis pipeline (NER, rerank, antispam, weights, rules, scoring, debug)
 pub mod analyze;
@@ -18,12 +21,12 @@ pub mod analyze;
 // Phase 5 notifications & background jobs
 pub mod change_detector;
 pub mod notify;
-// NOTE: Removed `pub mod antiflutter;` — antiflutter now lives under `notify::antiflutter`.
+// NOTE: Removed `pub mod antiflutter;` â€” antiflutter now lives under `notify::antiflutter`.
 
 // ---- Re-exports for stable public API ----
 // Back-compat for tests expecting `crate_root::ai_adapter::...`
 pub use analyze::ai_adapter;
-// Pohodlný přístup k sestavení routeru: `crate_root::api::router` i `crate_root::router`
+// PohodlnÃ½ pÅ™Ã­stup k sestavenÃ­ routeru: `crate_root::api::router` i `crate_root::router`
 pub use crate::api::router;
 
 // Re-export notification types for easy use in bins/tests
@@ -51,3 +54,6 @@ pub async fn run_ai_quick_probe() -> anyhow::Result<()> {
     info!("AI quick probe finished");
     Ok(())
 }
+
+// Back-compat pro testy, co volaji crate::app
+pub use crate::api::app;

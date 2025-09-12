@@ -15,7 +15,7 @@ use tracing::info;
 
 // --- AI gating env names ---
 pub const ENV_AI_SOURCES: &str = "AI_SOURCES"; // comma-separated allowlist
-pub const ENV_AI_ONLY_TOP: &str = "AI_ONLY_TOP_SOURCES"; // "1"=restrict to top sources (default 1)
+pub const ENV_AI_ONLY_TOP: &str = "AI_ONLY_TOP_SOURCES"; // "1" = restrict to top sources (default 1)
 pub const ENV_AI_SCORE_BAND: &str = "AI_SCORE_BAND"; // near-threshold band (default 0.08)
 
 // --- env defaults & names ---
@@ -61,8 +61,7 @@ pub fn ai_client_from_env() -> SharedAi {
         return Arc::new(AiClientDisabled) as SharedAi;
     }
 
-    // Best-effort build from config/ai.json (interně si ji načte).
-    // `build_ai_client()` už vrací správně mock/real/disabled dle configu a AI_TEST_MODE.
+    // Best-effort build from config/ai.json (build_ai_client() chooses mock/real/disabled).
     build_ai_client()
 }
 
@@ -200,6 +199,27 @@ impl Default for Relevance {
             score: 0.0,
             matched: Vec::new(),
             reasons: Vec::new(),
+        }
+    }
+}
+
+/// Test/helper constructor used by integration tests.
+///
+/// Signature kept stable for tests:
+/// `Relevance::test_new(score, _threshold, _band, reasons, _label)`
+impl Relevance {
+    #[cfg_attr(not(test), doc(hidden))]
+    pub fn test_new(
+        score: f32,
+        _threshold: f32,
+        _band: f32,
+        reasons: Vec<String>,
+        _label: &str,
+    ) -> Self {
+        Self {
+            score,
+            matched: Vec::new(),
+            reasons,
         }
     }
 }
@@ -370,7 +390,7 @@ pub fn extract_threshold_from_reasons(rel: &Relevance) -> Option<f32> {
 /// Decide whether we should call the AI for cost-sensitive hints.
 /// Policy:
 /// - If blocked or neutralized (score == 0.0), return false.
-/// - Test bypass: if AI_TEST_MODE=mock → return true (client může být i tak disabled přes AI_ENABLED=0).
+/// - Test bypass: if AI_TEST_MODE=mock → return true (client may still be disabled via AI_ENABLED=0).
 /// - If ENV_AI_ONLY_TOP_SOURCES=1 (default true), require `source` to be a "top source"
 ///   or to be present in ENV_AI_SOURCES allowlist.
 /// - If we passed the threshold, call AI only when `score` is within BAND above the threshold.
@@ -592,7 +612,7 @@ impl RelevanceEngine {
         hits
     }
 
-    /// Find anchor hits with proximity qualification (if configured).
+    /// Find anchors that apply to `text` considering optional `near`.
     /// Returns vector of "anchor:<id>[:tag]" strings.
     #[allow(dead_code)]
     pub fn find_anchors(&self, text: &str) -> Vec<String> {
@@ -988,7 +1008,7 @@ pattern = "(?i)\\b(djia|dow jones|the dow|dow)\\b"
 id = "powell_near_fed_rates"
 category = "macro"
 pattern = "(?i)\\bpowell\\b"
-near = { pattern = "(?i)\\b(fed|rates?|fomc)\\b", window = 6 }
+near = { pattern = "(?i)\\b(fed|fomc|rates?)\\b", window = 10 }
 
 # Optional "single stock only" tag for Dow Inc. (edge case)
 [[anchors]]
@@ -1125,10 +1145,8 @@ need = ["macro","hard"]
             "single-stock-only without broader context should neutralize"
         );
         // If the engine records the explicit reason, it should be present:
-        // (make the assertion soft to avoid flakiness if reason text changes)
-        let might_have_reason = r.reasons.iter().any(|s| s.contains("single_stock_only"));
-        // Not required, but helps catch regression:
-        let _ = might_have_reason;
+        // (soft assertion to avoid brittleness if reason text changes)
+        let _might_have_reason = r.reasons.iter().any(|s| s.contains("single_stock_only"));
     }
 
     #[test]

@@ -934,7 +934,7 @@ use sha2::{Digest, Sha256};
 use tokio::time::{Duration, Instant};
 
 /// Map: cache-key -> expiry Instant (pevná expirace s malým negativním biasem)
-static AI_CACHE_EXPIRY: Lazy<DashMap<String, Instant>> = Lazy::new(|| DashMap::new());
+static AI_CACHE_EXPIRY: Lazy<DashMap<String, Instant>> = Lazy::new(DashMap::new);
 
 fn ai_cache_ttl() -> Duration {
     // Preferred: millisecond TTL for precise tests

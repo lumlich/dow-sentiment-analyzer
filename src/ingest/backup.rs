@@ -36,6 +36,7 @@ pub fn spawn_daily_backup_task<S: BackupSink + 'static>(sink: S) {
 }
 
 // --- Test helper ---
+#[derive(Default)]
 pub struct MockSink {
     pub calls: std::sync::Mutex<Vec<Vec<(String, String)>>>,
 }

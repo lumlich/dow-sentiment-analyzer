@@ -47,10 +47,6 @@ fn enable_dev_tracing() {
         .try_init();
 }
 
-async fn root_health() -> impl IntoResponse {
-    "ok"
-}
-
 async fn version() -> impl IntoResponse {
     let v = env!("CARGO_PKG_VERSION");
     format!("{} (service: dow-sentiment-analyzer)", v)
@@ -154,11 +150,11 @@ async fn axum(
         .append_index_html_on_directories(true)
         .not_found_service(ServeFile::new("ui/dist/index.html"));
 
+    // DŮLEŽITÉ: nepřidáváme duplicity typu /health.
+    // API router obsahuje /health, /metrics a další REST cesty.
+    // Použijeme .merge(api_router), aby /metrics bylo dostupné na kořeni.
     let app: Router<()> = Router::new()
-        .route("/health", get(root_health))
-        .route("/_version", get(version))
-        .route("/api/ping", get(|| async { "pong" }))
-        .nest("/api", api_router)
+        .merge(api_router)
         .fallback_service(static_files);
 
     // --- Spawn background change detector (Tokio task) ---
@@ -167,6 +163,35 @@ async fn axum(
             tracing::error!("change detector exited: {e:#}");
         }
     });
+
+    // --- Ingest whitelist + optional fixture scheduler ---
+    use dow_sentiment_analyzer::ingest::config::load_whitelist_default;
+    use dow_sentiment_analyzer::ingest::scheduler::{spawn_fixture_scheduler, IngestSchedulerCfg};
+
+    let whitelist = match load_whitelist_default() {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("whitelist load failed: {e:#}");
+            Vec::new()
+        }
+    };
+
+    let run_scheduler = std::env::var("INGEST_SCHEDULER")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    #[cfg(feature = "ingest-fixtures")]
+    if run_scheduler {
+        tracing::info!("Starting ingest fixture scheduler (30s interval, 600s dedup)");
+        let _jh = spawn_fixture_scheduler(
+            IngestSchedulerCfg {
+                interval_secs: 30,
+                dedup_window_secs: 600,
+            },
+            whitelist.clone(),
+        );
+    }
 
     Ok(app.into())
 }

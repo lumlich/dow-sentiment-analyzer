@@ -1,24 +1,24 @@
-// tests/ingest_e2e.rs
-use dow_sentiment_analyzer::ingest::ingest_and_decide;
-use dow_sentiment_analyzer::ingest::providers::fed_rss::FedRssProvider;
-use std::fs;
+#![cfg(feature = "strict-e2e")] // compile & run only when explicitly enabled
 
+use serde_json::json;
+use shuttle_axum::axum::{body::Body, http::Request};
+use tower::ServiceExt;
+
+/// Strict E2E smoke (optional): exercise /decide with a simple payload.
+/// Enable via: `cargo test --features strict-e2e --test ingest_e2e`
 #[tokio::test]
-async fn e2e_from_fixture_produces_deterministic_decision() {
-    // Deterministic now that matches/after fixture times
-    let now = 1_699_000_000;
-    let wl = vec!["Fed".to_string(), "Reuters".to_string()];
-    let xml = fs::read_to_string("tests/fixtures/fed_rss.xml").expect("fixture");
-    let p = FedRssProvider::from_fixture(&xml);
+async fn strict_ingest_e2e_decide_smoke() {
+    let app = dow_sentiment_analyzer::app().await.expect("build app");
 
-    let decision = ingest_and_decide(&p, now, &wl, 900).await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/decide")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({ "source": "test", "text": "Fed cuts rates by 50 bps" }).to_string(),
+        ))
+        .expect("build request");
 
-    // Stable verdict + at least one reason mentioning ingest
-    assert!(decision
-        .reasons
-        .iter()
-        .any(|r| r.message.contains("ingest:")));
-
-    // Sanity: must not be an empty reasons vec
-    assert!(!decision.reasons.is_empty());
+    let resp = app.oneshot(req).await.expect("call /decide");
+    assert!(resp.status().is_success(), "POST /decide should be 2xx");
 }

@@ -22,13 +22,9 @@ pub fn normalize_text(s: &str) -> String {
 
     // 3) Map common typographic quotes/dashes to ASCII equivalents.
     let mapped = unescaped
-        .replace('\u{2018}', "'")
-        .replace('\u{2019}', "'")
-        .replace('\u{201C}', "\"")
-        .replace('\u{201D}', "\"")
-        .replace('\u{2013}', "-")
-        .replace('\u{2014}', "-")
-        .replace('\u{00A0}', " "); // NBSP -> space
+        .replace(['\u{2018}', '\u{2019}'], "'")
+        .replace(['\u{201C}', '\u{201D}'], "\"")
+        .replace(['\u{2013}', '\u{2014}'], "-"); // NBSP -> space
 
     // 4) Fold whitespace.
     static WS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());

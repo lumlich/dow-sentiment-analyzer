@@ -1,90 +1,87 @@
 // src/ingest/mod.rs
 pub mod backup;
+pub mod config;
 pub mod providers;
+pub mod scheduler;
 pub mod types;
 
 use crate::ingest::types::{SourceEvent, SourceProvider};
-use html_escape;
 use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gauge};
 use once_cell::sync::OnceCell;
-use regex::Regex;
 use std::collections::HashSet;
 
 /// One-time metrics registration (so series show up on /metrics).
 fn ensure_metrics_described() {
     static ONCE: OnceCell<()> = OnceCell::new();
     ONCE.get_or_init(|| {
-        describe_counter!(
-            "ingest_events_total",
-            "Number of source events produced by providers (pre/post filter as noted)."
-        );
-        describe_counter!(
-            "ingest_provider_errors_total",
-            "Number of provider errors during fetch/parse."
-        );
-        describe_histogram!(
-            "ingest_parse_ms",
-            "Time spent parsing provider payloads in milliseconds."
-        );
+        describe_counter!("ingest_events_total", "Total events parsed from providers.");
         describe_counter!(
             "ingest_kept_total",
-            "Number of events kept after normalize/filter/dedup."
+            "Events kept after normalization + filtering."
         );
         describe_counter!(
             "ingest_filtered_total",
-            "Number of events filtered out by whitelist or empty text."
+            "Events filtered out due to whitelist/empty."
         );
         describe_counter!(
             "ingest_dedup_total",
-            "Number of events removed as duplicates."
+            "Events removed by deduplication window."
         );
+        describe_counter!(
+            "ingest_provider_errors_total",
+            "Provider fetch/parse errors."
+        );
+        describe_histogram!("ingest_parse_ms", "Provider parse time in milliseconds.");
         describe_gauge!(
             "ingest_pipeline_last_run_ts",
-            "Unix timestamp of last successful ingest run."
+            "Unix ts when ingest pipeline last ran."
         );
     });
 }
 
-/// Normalize input text: strip HTML, unescape entities, fold whitespace, map typographic quotes to
-/// ASCII, collapse NBSP, trim, and length-cap.
+/// Normalize text: collapse whitespace, trim, strip stray punctuation.
 pub fn normalize_text(s: &str) -> String {
-    // 1) Remove HTML tags (coarse but deterministic).
-    static TAG_RE: OnceCell<Regex> = OnceCell::new();
-    let tag_re = TAG_RE.get_or_init(|| Regex::new(r"(?is)<[^>]+>").unwrap());
-    let without_tags = tag_re.replace_all(s, "");
+    // 1) HTML entity decode
+    let mut out = html_escape::decode_html_entities(s).to_string();
 
-    // 2) HTML entities decode.
-    let unescaped = html_escape::decode_html_entities(&without_tags).to_string();
+    // 2) Strip HTML tags
+    static RE_TAGS: once_cell::sync::OnceCell<regex::Regex> = once_cell::sync::OnceCell::new();
+    let re_tags = RE_TAGS.get_or_init(|| regex::Regex::new(r"(?is)</?[^>]+>").unwrap());
+    out = re_tags.replace_all(&out, "").to_string();
 
-    // 3) Map common typographic quotes/dashes to ASCII equivalents and NBSP -> space.
-    let mapped = unescaped
-        .replace(['\u{2018}', '\u{2019}'], "'")
-        .replace(['\u{201C}', '\u{201D}'], "\"")
-        .replace(['\u{2013}', '\u{2014}'], "-")
-        .replace('\u{00A0}', " ");
+    // 3) Normalize “ ” ‘ ’ « » to ASCII quotes
+    out = out
+        .replace(['\u{201C}', '\u{201D}', '\u{00AB}', '\u{00BB}'], "\"")
+        .replace(['\u{2018}', '\u{2019}'], "'");
 
-    // 4) Fold whitespace & trim.
-    static WS_RE: OnceCell<Regex> = OnceCell::new();
-    let ws_re = WS_RE.get_or_init(|| Regex::new(r"\s+").unwrap());
-    let folded = ws_re.replace_all(mapped.trim(), " ");
+    // 4) Collapse whitespace
+    static RE_WS: once_cell::sync::OnceCell<regex::Regex> = once_cell::sync::OnceCell::new();
+    let re_ws = RE_WS.get_or_init(|| regex::Regex::new(r"\s+").unwrap());
+    out = re_ws.replace_all(&out, " ").to_string();
+    out = out.trim().to_string();
 
-    // 5) Length cap (safety net).
-    const MAX_LEN: usize = 1_500;
-    let mut out = folded.to_string();
-    if out.len() > MAX_LEN {
-        out.truncate(MAX_LEN);
+    // 5) Strip trailing sentence punctuation (keep quotes)
+    while let Some(last) = out.chars().last() {
+        if matches!(last, '!' | '?' | '.' | ',') {
+            out.pop();
+        } else {
+            break;
+        }
     }
+
+    // 6) Length cap: 1500 chars
+    if out.chars().count() > 1500 {
+        out = out.chars().take(1500).collect();
+    }
+
     out
 }
 
-/// Return true if source is in authority whitelist.
 pub fn is_whitelisted<S: AsRef<str>>(source: S, whitelist: &[String]) -> bool {
     let s = source.as_ref();
     whitelist.iter().any(|w| w.eq_ignore_ascii_case(s))
 }
 
-/// Ingest pipeline: normalize -> filter (whitelist & non-empty) -> dedup.
-/// Returns (kept_events, filtered_count, dedup_count).
 pub fn normalize_filter_dedup(
     now: u64,
     raw_events: Vec<SourceEvent>,
@@ -105,7 +102,7 @@ pub fn normalize_filter_dedup(
         filtered.push(ev);
     }
 
-    // Deduplicate within window by exact text match of recent items.
+    // Deduplicate by text for recent items only (within window).
     let mut seen_texts: HashSet<String> = HashSet::new();
     let mut keep = Vec::with_capacity(filtered.len());
     let mut dedup_out = 0usize;
@@ -122,8 +119,13 @@ pub fn normalize_filter_dedup(
     (keep, filtered_out, dedup_out)
 }
 
-/// Minimal batch ingest: call all providers, merge, normalize+filter+dedup, emit metrics.
-pub async fn run_once(providers: &[Box<dyn SourceProvider>]) -> Vec<SourceEvent> {
+/// Run ingest once using the provided providers and configuration.
+/// Returns (kept, filtered_count, dedup_count).
+pub async fn run_once(
+    providers: &[Box<dyn SourceProvider>],
+    whitelist: &[String],
+    dedup_window_secs: u64,
+) -> (Vec<SourceEvent>, usize, usize) {
     ensure_metrics_described();
 
     let mut raw = Vec::new();
@@ -138,8 +140,8 @@ pub async fn run_once(providers: &[Box<dyn SourceProvider>]) -> Vec<SourceEvent>
     }
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    let whitelist: Vec<String> = Vec::new(); // will be wired from config later
-    let (kept, filtered_cnt, dedup_cnt) = normalize_filter_dedup(now, raw, &whitelist, 600);
+    let (kept, filtered_cnt, dedup_cnt) =
+        normalize_filter_dedup(now, raw, whitelist, dedup_window_secs);
 
     // Telemetry
     counter!("ingest_kept_total").increment(kept.len() as u64);
@@ -147,59 +149,66 @@ pub async fn run_once(providers: &[Box<dyn SourceProvider>]) -> Vec<SourceEvent>
     counter!("ingest_dedup_total").increment(dedup_cnt as u64);
     gauge!("ingest_pipeline_last_run_ts").set(now as f64);
 
-    kept
+    (kept, filtered_cnt, dedup_cnt)
 }
 
-/// ---
-/// Back-compat **E2E facade** expected by `tests/ingest_e2e.rs`.
-/// Signature preserved: (&SourceProvider, now, &whitelist, dedup_window_secs)
-/// Returns a minimal struct with `.reasons` where every reason has a `.message` field.
-/// We also ALWAYS inject a header reason starting with "ingest:" so the test passes deterministically.
-/// ---
-#[derive(Debug, Clone)]
-pub struct CompatReason {
-    pub message: String,
+/// Backward-compatible helper with empty whitelist and default 600s window.
+/// Keeps existing tests working.
+pub async fn run_once_with_empty_whitelist(
+    providers: &[Box<dyn SourceProvider>],
+) -> Vec<SourceEvent> {
+    run_once(providers, &[], 600).await.0
 }
 
-#[derive(Debug, Clone)]
-pub struct CompatDecision {
-    pub reasons: Vec<CompatReason>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-pub async fn ingest_and_decide<P: SourceProvider + ?Sized>(
-    provider: &P,
-    now: u64,
-    whitelist: &[String],
-    dedup_window_secs: u64,
-) -> CompatDecision {
-    ensure_metrics_described();
+    #[test]
+    fn normalize_text_collapses_ws_and_punct() {
+        let s = "  Hello,&nbsp;&nbsp; world!!!  ";
+        let out = normalize_text(s);
+        assert_eq!(out, "Hello, world");
+    }
 
-    // Fetch from a single provider (per old test contract).
-    let raw = match provider.fetch_latest().await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = ?e, provider = provider.name(), "provider error");
-            counter!("ingest_provider_errors_total").increment(1);
-            Vec::new()
-        }
-    };
+    #[test]
+    fn whitelist_matching_is_case_insensitive() {
+        let wl = vec!["Fed".to_string(), "Reuters".into()];
+        assert!(is_whitelisted("fed", &wl));
+        assert!(is_whitelisted("REUTERS", &wl));
+        assert!(!is_whitelisted("Bloomberg", &wl));
+    }
 
-    let (kept, filtered_cnt, dedup_cnt) =
-        normalize_filter_dedup(now, raw, whitelist, dedup_window_secs);
-
-    counter!("ingest_kept_total").increment(kept.len() as u64);
-    counter!("ingest_filtered_total").increment(filtered_cnt as u64);
-    counter!("ingest_dedup_total").increment(dedup_cnt as u64);
-    gauge!("ingest_pipeline_last_run_ts").set(now as f64);
-
-    // Build reasons: always include an "ingest:" header + mapped texts.
-    let mut reasons = Vec::with_capacity(1 + kept.len());
-    reasons.push(CompatReason {
-        message: format!("ingest: provider={}, kept={}", provider.name(), kept.len()),
-    });
-    reasons.extend(kept.into_iter().map(|e| CompatReason {
-        message: format!("ingest: {}", e.text),
-    }));
-
-    CompatDecision { reasons }
+    #[test]
+    fn dedup_by_text_within_window() {
+        let now = 1000u64;
+        let wl: Vec<String> = vec![];
+        let evs = vec![
+            SourceEvent {
+                source: "Fed".into(),
+                published_at: 995,
+                text: "abc".into(),
+                url: None,
+                priority_hint: None,
+            },
+            SourceEvent {
+                source: "Fed".into(),
+                published_at: 996,
+                text: "abc".into(),
+                url: None,
+                priority_hint: None,
+            },
+            SourceEvent {
+                source: "Fed".into(),
+                published_at: 300,
+                text: "abc".into(),
+                url: None,
+                priority_hint: None,
+            },
+        ];
+        let (kept, filtered, dedup) = normalize_filter_dedup(now, evs, &wl, 600);
+        assert_eq!(kept.len(), 2); // one deduped within window; the old one kept
+        assert_eq!(filtered, 0);
+        assert_eq!(dedup, 1);
+    }
 }

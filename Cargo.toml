@@ -75,4 +75,4 @@ tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 http = "1"
 parking_lot = "0.12"
-serial_test = "2.0"
+serial_test = "3.2"

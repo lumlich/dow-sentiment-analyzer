@@ -1,6 +1,7 @@
 // tests/ingest_pipeline.rs
 use anyhow::Result;
 use async_trait::async_trait;
+use dow_sentiment_analyzer::ingest::run_once;
 use dow_sentiment_analyzer::ingest::types::{SourceEvent, SourceProvider};
 
 struct MockProvider;
@@ -24,7 +25,7 @@ impl SourceProvider for MockProvider {
 #[tokio::test]
 async fn smoke_pipeline_runs_and_outputs() {
     let providers: Vec<Box<dyn SourceProvider>> = vec![Box::new(MockProvider)];
-    let out = dow_sentiment_analyzer::ingest::run_once_with_empty_whitelist(&providers).await;
+    let out = run_once(&providers).await;
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].text, r#"Hello world "ok""#);
 }

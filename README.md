@@ -61,24 +61,18 @@ pong
 
 ### POST /api/analyze
 ```bash
-curl -s -X POST http://localhost:8000/api/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"text":"Fed signals a cautious path to rate cuts this year.","source":"Fed"}'
+curl -s -X POST http://localhost:8000/api/analyze   -H "Content-Type: application/json"   -d '{"text":"Fed signals a cautious path to rate cuts this year.","source":"Fed"}'
 ```
 
 ### POST /api/batch
 ```bash
-curl -s -X POST http://localhost:8000/api/batch \
-  -H "Content-Type: application/json" \
-  -d '[{"id":"a1","text":"Trump says Dow will soar.","source":"Trump"},
+curl -s -X POST http://localhost:8000/api/batch   -H "Content-Type: application/json"   -d '[{"id":"a1","text":"Trump says Dow will soar.","source":"Trump"},
        {"id":"b2","text":"Reuters: unexpected slowdown in manufacturing.","source":"Reuters"}]'
 ```
 
 ### POST /api/decide
 ```bash
-curl -s -X POST http://localhost:8000/api/decide \
-  -H "Content-Type: application/json" \
-  -d '[{"source":"Reuters","text":"ISM manufacturing dips below 50; the Dow slips."}]'
+curl -s -X POST http://localhost:8000/api/decide   -H "Content-Type: application/json"   -d '[{"source":"Reuters","text":"ISM manufacturing dips below 50; the Dow slips."}]'
 ```
 Response (example):
 ```json
@@ -117,6 +111,78 @@ We use cargo aliases (see `.cargo/config.toml`) for convenience:
 - `cargo ts` → run synthetic suite (marked `#[ignore]`)  
 - `cargo cf` → check formatting  
 - `cargo cl` → run Clippy with `-D warnings`  
+
+---
+
+## Phase 6 — Ingest (HTTP + Fixtures)
+
+### Features
+| Feature           | What it does                                                    | Default |
+|-------------------|-----------------------------------------------------------------|---------|
+| `ingest-fixtures` | Build providers from local XML fixtures (no network)            | ✅      |
+| `ingest-http`     | Enable HTTP-backed providers (`from_url()` + `fetch_latest()`)  | ❌      |
+| `strict-metrics`  | Compile strict ingest metrics test                              | ❌      |
+| `strict-e2e`      | Compile a strict E2E smoke test for `/decide`                   | ❌      |
+
+> Defaults remain unchanged: `default = ["ingest-fixtures"]`. CI does **not** make network calls.
+
+### HTTP ingest (opt-in)
+Providers support both fixtures and HTTP:
+```rust
+#[cfg(feature = "ingest-http")]
+{
+    use dow_sentiment_analyzer::ingest::providers::{
+        fed_rss::FedRssProvider,
+        reuters_rss::ReutersRssProvider,
+    };
+
+    let fed     = FedRssProvider::from_url("https://www.federalreserve.gov/feeds/press_all.xml");
+    let reuters = ReutersRssProvider::from_url("https://feeds.reuters.com/reuters/businessNews");
+
+    // Example (do not call in CI):
+    // let fed_items = fed.fetch_latest().await?;
+    // let reu_items = reuters.fetch_latest().await?;
+}
+```
+Telemetry on HTTP errors:
+- Logs `warn!` with provider name
+- Increments `ingest_provider_errors_total`
+
+### End-to-end (fixtures → analyze → verdict)
+A fast, network-free test drives ingest → `/analyze` and asserts a valid decision with non-empty reasons:
+```bash
+cargo test --test ingest_e2e_decision
+```
+
+Strict E2E for `/decide` is opt-in:
+```bash
+cargo test --features "strict-e2e" --test ingest_e2e -- --nocapture
+```
+
+### Build & lint with HTTP enabled (compilation-only)
+```bash
+cargo check  --features ingest-http
+cargo clippy --features ingest-http -- -D warnings
+cargo test   --no-run --features ingest-http
+```
+
+### Runtime backup smoke (optional)
+Quick ways to verify the backup path without CI network calls:
+
+**A) Unit smoke**
+```bash
+cargo test --test backup_cron -- --nocapture
+```
+
+**B) Runtime log check**
+```bash
+# Windows PowerShell
+$env:RUST_LOG = "debug"
+cargo shuttle run
+# Observe logs for messages like: "backup sink stored <n> files"
+```
+
+> The HTTP ingest **does not** include a runtime scheduler. The only scheduler remains the fixture scheduler behind `ingest-fixtures`.
 
 ---
 
@@ -163,18 +229,18 @@ verb = 1
 [[anchors]]
 id = "djia_core_names"
 category = "hard"
-pattern = "(?i)\\b(djia|dow jones|the dow)\\b"
+pattern = "(?i)\b(djia|dow jones|the dow)\b"
 
 [[anchors]]
 id = "powell_near_fed_rates"
 category = "macro"
-pattern = "(?i)\\bpowell\\b"
-near = { pattern = "(?i)\\b(fed|fomc|rates?)\\b", window = 6 }
+pattern = "(?i)\bpowell\b"
+near = { pattern = "(?i)\b(fed|fomc|rates?)\b", window = 6 }
 
 [[blockers]]
 id = "dji_drones"
-pattern = "(?i)\\bdji\\b"
-near = { pattern = "(?i)\\b(drone|mavic|gimbal)\\b", window = 4 }
+pattern = "(?i)\bdji\b"
+near = { pattern = "(?i)\b(drone|mavic|gimbal)\b", window = 4 }
 
 [[combos.pass_any]]
 need = ["macro","hard"]
@@ -236,7 +302,7 @@ dow_sentiment_analyzer::change_detector::run_change_detector_loop().await?;
 
 ---
 
-## Small Env Snippets (Phase 5 follow‑up)
+## Small Env Snippets (Phase 5 follow-up)
 
 For local tinkering scripts/crons:
 ```bash

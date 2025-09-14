@@ -1,15 +1,12 @@
 use dow_sentiment_analyzer::ingest::providers::fed_rss::FedRssProvider;
 use dow_sentiment_analyzer::ingest::types::SourceProvider;
-use std::fs;
+
+// Use a 'static fixture via include_str! to cover the from_fixture(&'static str) path.
+const FED_XML: &str = include_str!("fixtures/fed_rss.xml");
 
 #[tokio::test]
-async fn fed_fixture_string_parses_and_yields_events() {
-    // Load XML fixture as String
-    let xml = fs::read_to_string("tests/fixtures/fed_rss.xml")
-        .expect("missing tests/fixtures/fed_rss.xml");
-
-    // Use the non-'static constructor to avoid lifetime issues
-    let provider = FedRssProvider::from_fixture_str(&xml);
+async fn fed_fixture_static_parses_and_yields_events() {
+    let provider = FedRssProvider::from_fixture(FED_XML);
 
     let items = provider.fetch_latest().await.expect("fed parse ok");
     assert!(

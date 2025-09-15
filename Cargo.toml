@@ -22,7 +22,7 @@ sha2 = "0.10"
 dotenvy = "0.15"
 strsim = "0.10"
 async-trait = "0.1"
-dashmap = "5.5"
+dashmap = "6.1"
 
 # Web framework
 axum = { version = "0.8.4", features = ["macros"] }

@@ -38,3 +38,7 @@ ui/.cache/
 # ── AI cache (pokud používáš)
 cache/ai/
 !cache/.gitkeep
+
+ui.off/.env.local
+
+ui.off/.env.production.local

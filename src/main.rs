@@ -1,197 +1,214 @@
-//! MVP Sentiment Service — Binary Entrypoint
-//! Boots the Axum HTTP server, wiring routes, shared state, and middleware.
+//! Shuttle entrypoint: build top-level Axum app, serve the SPA UI + static assets,
+//! mount the existing API under /api, start the ingest scheduler, and load secrets.
+//! All public comments are in English.
 
-use axum::{response::IntoResponse, routing::get, Router};
+use serde::Serialize;
+use shuttle_axum::axum::{
+    extract::Path,
+    http::{header, HeaderValue, StatusCode},
+    response::{Html, IntoResponse, Response},
+    routing::get,
+    Router,
+};
 use shuttle_axum::ShuttleAxum;
 use shuttle_runtime::SecretStore;
-use std::path::PathBuf;
-use tower_http::services::{ServeDir, ServeFile};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use std::{path::PathBuf, time::Duration};
+use tower::ServiceBuilder;
+use tower_http::{compression::CompressionLayer, trace::TraceLayer};
+use tracing::{info, warn};
 
-use chrono::Utc;
+// ----- UI embedding -----
+// Embed the ALREADY-BUNDLED SPA entry from ./assets (present both locally and in Shuttle build assets)
+const INDEX_HTML: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/index.html"));
 
-use dow_sentiment_analyzer::api;
-use dow_sentiment_analyzer::relevance::{
-    start_hot_reload_thread, AppState, RelevanceEngine, RelevanceHandle,
-    DEFAULT_RELEVANCE_CONFIG_PATH, ENV_RELEVANCE_CONFIG_PATH,
+#[derive(Serialize)]
+struct VersionInfo {
+    name: &'static str,
+    version: &'static str,
+}
+
+async fn version() -> shuttle_axum::axum::Json<VersionInfo> {
+    shuttle_axum::axum::Json(VersionInfo {
+        name: env!("CARGO_PKG_NAME"),
+        version: env!("CARGO_PKG_VERSION"),
+    })
+}
+
+async fn health() -> &'static str {
+    "ok"
+}
+
+/// Return the embedded index.html with a no-store cache directive.
+/// Assets are long-cached; index is never cached to always pick the latest hashed filenames.
+fn index_response() -> impl IntoResponse {
+    let headers = [
+        (header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8")),
+        (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+    ];
+    (headers, Html(INDEX_HTML))
+}
+
+async fn index_html() -> impl IntoResponse {
+    index_response()
+}
+
+// ----- Secrets -----
+
+/// Load selected keys from Shuttle `SecretStore` into process env so downstream code can `std::env::var` them.
+fn load_secrets_into_env(secrets: &SecretStore) {
+    const KEYS: &[&str] = &[
+        // AI
+        "AI_PROVIDER",
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+        "OPENAI_API_BASE",
+        "AI_ONLY_TOP_SOURCES",
+        "AI_SCORE_BAND",
+        "AI_DECISION_CACHE_TTL_MS",
+        "AI_SOURCES",
+        "AI_TEST_MODE",
+        // Ingest
+        "INGEST_ENABLED",
+        "INGEST_INTERVAL_SECS",
+        "INGEST_DEDUP_WINDOW_SECS",
+        "INGEST_WHITELIST_PATH",
+        // CORS (if used in API)
+        "ALLOWED_ORIGINS",
+    ];
+    for k in KEYS {
+        if let Some(v) = secrets.get(k) {
+            std::env::set_var(k, v);
+        }
+    }
+}
+
+// ----- Static file helpers (replace ServeDir/ServeFile to avoid handle_error type issues) -----
+
+fn sanitize_segment(seg: &str) -> bool {
+    // Reject dangerous segments to prevent path traversal
+    !seg.is_empty() && seg != "." && seg != ".." && !seg.contains('\\')
+}
+
+async fn read_file_response(full: PathBuf, cache_control: &'static str) -> Response {
+    match tokio::fs::read(&full).await {
+        Ok(bytes) => {
+            // Guess content-type with fallback to octet-stream
+            let guessed = mime_guess::from_path(&full).first_or_octet_stream();
+            let ct = HeaderValue::from_str(guessed.as_ref())
+                .unwrap_or(HeaderValue::from_static("application/octet-stream"));
+
+            let mut resp =
+                ([(header::CACHE_CONTROL, HeaderValue::from_static(cache_control))], bytes)
+                    .into_response();
+            resp.headers_mut().insert(header::CONTENT_TYPE, ct);
+            resp
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "Not found").into_response(),
+    }
+}
+
+async fn assets_handler(Path(path): Path<String>) -> Response {
+    // Only allow safe segments
+    let safe: Vec<&str> = path.split('/').filter(|s| sanitize_segment(s)).collect();
+    let full = PathBuf::from("assets").join(safe.join("/"));
+    // Long immutable cache for hashed assets
+    read_file_response(full, "public, max-age=31536000, immutable").await
+}
+
+async fn favicon_handler() -> Response {
+    // Try root favicon.ico first (if present), then assets/favicon.ico, else 404
+    if tokio::fs::metadata("favicon.ico").await.is_ok() {
+        read_file_response(PathBuf::from("favicon.ico"), "public, max-age=86400").await
+    } else {
+        read_file_response(PathBuf::from("assets/favicon.ico"), "public, max-age=86400").await
+    }
+}
+
+// ----- Ingest scheduler (LIVE providers) -----
+
+use dow_sentiment_analyzer::{
+    api,
+    ingest::{self, providers::{fed_rss::FedRssProvider, reuters_rss::ReutersRssProvider}, types::SourceProvider},
+    relevance::AppState,
 };
 
-// --- Notifications / Change Detector (from crate lib) ---
-use dow_sentiment_analyzer::change_detector;
-use dow_sentiment_analyzer::notify::{DecisionKind, NotificationEvent, NotifierMux};
-
-fn enable_dev_tracing() {
-    let dev_flag = std::env::var("RELEVANCE_DEV_LOG")
-        .ok()
-        .is_some_and(|v| v == "1");
-
-    let is_dev_env = cfg!(debug_assertions)
-        || matches!(
-            std::env::var("SHUTTLE_ENV")
-                .unwrap_or_default()
-                .to_ascii_lowercase()
-                .as_str(),
-            "local" | "development" | "dev"
-        );
-
-    if !(dev_flag && is_dev_env) {
+async fn run_ingest_scheduler(_app_state: AppState) {
+    let enabled = std::env::var("INGEST_ENABLED").unwrap_or_else(|_| "false".into()) == "true";
+    if !enabled {
+        info!("ingest scheduler disabled (INGEST_ENABLED=false)");
         return;
     }
 
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("relevance=info,warn"));
+    let interval_secs: u64 = std::env::var("INGEST_INTERVAL_SECS")
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(300);
 
-    let _ = tracing_subscriber::registry()
-        .with(filter)
-        .with(fmt::layer().compact())
-        .try_init();
+    let dedup_window_secs: u64 = std::env::var("INGEST_DEDUP_WINDOW_SECS")
+        .ok().and_then(|s| s.parse().ok()).unwrap_or(600);
+
+    info!("starting ingest scheduler (every {interval_secs}s)");
+    let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
+
+    loop {
+        ticker.tick().await;
+
+        // Load whitelist (env path -> TOML -> JSON -> empty)
+        let whitelist = ingest::config::load_whitelist_default().unwrap_or_default();
+
+        // Build providers (network)
+        let providers: Vec<Box<dyn SourceProvider>> = vec![
+            Box::new(FedRssProvider::new()),
+            Box::new(ReutersRssProvider::new()),
+        ];
+
+        // Run pipeline once
+        let (kept, filtered, dedup) =
+            ingest::run_once(&providers, &whitelist, dedup_window_secs).await;
+
+        info!(
+            kept = kept.len(),
+            filtered = filtered,
+            dedup = dedup,
+            "ingest tick finished"
+        );
+    }
 }
 
-async fn version() -> impl IntoResponse {
-    let v = env!("CARGO_PKG_VERSION");
-    format!("{} (service: dow-sentiment-analyzer)", v)
-}
-
-/// Copy selected Shuttle secrets into process env so the library notifiers can read them.
-/// We only set a var if it's not already present in the environment.
-fn export_notification_secrets_to_env(secrets: &SecretStore) {
-    let set_if_missing = |key_env: &str, key_secret: &str| {
-        if std::env::var(key_env).is_err() {
-            if let Some(val) = secrets.get(key_secret) {
-                std::env::set_var(key_env, val);
-                tracing::debug!("exported secret {key_secret} -> env {key_env}");
-            }
-        }
-    };
-
-    // Webhooks (note: some repos use SLACK_WEBHOOK vs SLACK_WEBHOOK_URL)
-    set_if_missing("DISCORD_WEBHOOK_URL", "DISCORD_WEBHOOK_URL");
-    set_if_missing("SLACK_WEBHOOK_URL", "SLACK_WEBHOOK_URL");
-    set_if_missing("SLACK_WEBHOOK_URL", "SLACK_WEBHOOK"); // fallback key used earlier
-
-    // Email secrets (optional)
-    set_if_missing("SMTP_HOST", "SMTP_HOST");
-    set_if_missing("SMTP_USER", "SMTP_USER");
-    set_if_missing("SMTP_PASS", "SMTP_PASS");
-    set_if_missing("NOTIFY_EMAIL_FROM", "NOTIFY_EMAIL_FROM");
-    set_if_missing("NOTIFY_EMAIL_TO", "NOTIFY_EMAIL_TO");
-}
+// ----- Shuttle entrypoint -----
 
 #[shuttle_runtime::main]
 async fn axum(
-    // Inject Shuttle secrets here
     #[shuttle_runtime::Secrets] secrets: SecretStore,
 ) -> ShuttleAxum {
-    let _ = dotenvy::dotenv();
-    enable_dev_tracing();
+    // 1) Make secrets available to the rest of the code (AI adapter, etc.)
+    load_secrets_into_env(&secrets);
 
-    // Make webhooks/SMTP available to the unified notifier layer.
-    export_notification_secrets_to_env(&secrets);
+    // 2) Build the existing library API router and mount it under /api
+    //    IMPORTANT: do not modify `src/api.rs`; we reuse its public `router(...)`.
+    let state = AppState::from_env();
+    let api_router = api::router(state.clone());
 
-    // --- Optional: local/dev quick probe + notification test via NotifierMux ---
-    if matches!(
-        std::env::var("SHUTTLE_ENV")
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "local" | "development" | "dev"
-    ) {
-        if let Err(e) = dow_sentiment_analyzer::run_ai_quick_probe().await {
-            tracing::warn!(error = ?e, "AI quick probe didn't run");
-        }
+    // 3) Start ingest scheduler
+    tokio::spawn(run_ingest_scheduler(state));
 
-        // Send a single test event when NOTIFY_TEST is truthy.
-        let notify_test = std::env::var("NOTIFY_TEST")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-
-        if notify_test {
-            let mux = NotifierMux::from_env();
-            let ev = NotificationEvent {
-                decision: DecisionKind::HOLD,
-                confidence: 0.42,
-                reasons: vec!["wiring OK".into(), "mux reachable".into()],
-                ts: Utc::now(),
-            };
-            mux.notify(&ev).await;
-            tracing::info!("Sent NOTIFY_TEST event via NotifierMux");
-        }
-    }
-    // --- /Optional tests ---
-
-    // Relevance gate – start
-    let engine = match RelevanceEngine::from_toml() {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::error!(error=?e, "Failed to load relevance config - starting in degraded mode");
-
-            let static_files = ServeDir::new("ui/dist")
-                .append_index_html_on_directories(true)
-                .not_found_service(ServeFile::new("ui/dist/index.html"));
-
-            let degraded: Router<()> = Router::new()
-                .route("/health", get(|| async { "degraded" }))
-                .route("/_version", get(version))
-                .fallback_service(static_files);
-
-            return Ok(degraded.into());
-        }
-    };
-    let handle = RelevanceHandle::new(engine);
-    let path = std::env::var(ENV_RELEVANCE_CONFIG_PATH)
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_RELEVANCE_CONFIG_PATH));
-    start_hot_reload_thread(handle.clone(), path);
-
-    let state = AppState { relevance: handle };
-    let api_router: Router<()> = api::router(state);
-
-    let static_files = ServeDir::new("ui/dist")
-        .append_index_html_on_directories(true)
-        .not_found_service(ServeFile::new("ui/dist/index.html"));
-
-    // DŮLEŽITÉ: nepřidáváme duplicity typu /health.
-    // API router obsahuje /health, /metrics a další REST cesty.
-    // Použijeme .merge(api_router), aby /metrics bylo dostupné na kořeni.
-    let app: Router<()> = Router::new()
-        .merge(api_router)
-        .fallback_service(static_files);
-
-    // --- Spawn background change detector (Tokio task) ---
-    tokio::spawn(async {
-        if let Err(e) = change_detector::run_change_detector().await {
-            tracing::error!("change detector exited: {e:#}");
-        }
-    });
-
-    // --- Ingest whitelist + optional fixture scheduler ---
-    use dow_sentiment_analyzer::ingest::config::load_whitelist_default;
-    use dow_sentiment_analyzer::ingest::scheduler::{spawn_fixture_scheduler, IngestSchedulerCfg};
-
-    let whitelist = match load_whitelist_default() {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("whitelist load failed: {e:#}");
-            Vec::new()
-        }
-    };
-
-    let run_scheduler = std::env::var("INGEST_SCHEDULER")
-        .ok()
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    #[cfg(feature = "ingest-fixtures")]
-    if run_scheduler {
-        tracing::info!("Starting ingest fixture scheduler (30s interval, 600s dedup)");
-        let _jh = spawn_fixture_scheduler(
-            IngestSchedulerCfg {
-                interval_secs: 30,
-                dedup_window_secs: 600,
-            },
-            whitelist.clone(),
+    // 4) Compose the top-level app: UI + system endpoints + nested API
+    let app = Router::new()
+        // UI + static
+        .route("/", get(index_html))
+        .route("/assets/*path", get(assets_handler)) // <-- Axum wildcard syntax
+        .route("/favicon.ico", get(favicon_handler))
+        // SPA fallback
+        .fallback(get(index_html))
+        // System endpoints
+        .route("/_version", get(version))
+        .route("/_health", get(health))
+        // API mounted under /api
+        .nest("/api", api_router)
+        // Useful layers
+        .layer(
+            ServiceBuilder::new()
+                .layer(TraceLayer::new_for_http())
+                .layer(CompressionLayer::new()),
         );
-    }
 
     Ok(app.into())
 }

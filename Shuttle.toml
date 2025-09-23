@@ -1,0 +1,4 @@
+name = "dow-sentiment-analyzer-t9cd"
+
+[build]
+assets = ["assets/**", "favicon.ico"]

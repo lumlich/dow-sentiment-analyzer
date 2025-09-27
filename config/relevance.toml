@@ -237,3 +237,27 @@ need = ["semi", "semi", "soft", "verb"]
 
 [aliases]
 verb_or_semi = ["verb","semi"]
+
+# ==================
+# Optional sections
+# ==================
+
+[trend]
+# How many recent decisions to keep for sparkline/trend
+window = 12
+
+[penalties]
+# Confidence decay when source volume is low (0..1 multiplier applied by code)
+volume_idle_decay = 0.10
+
+[ai_gate]
+# Enable/disable AI contribution explicitly; code may also gate via env
+enabled = true
+# Minimal absolute delta AI must contribute to be counted (0..1)
+min_effect = 0.05
+
+[output]
+# Cap how many items to include in UI payloads
+max_top_reasons = 3
+max_evidence = 12
+include_meta = true

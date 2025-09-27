@@ -12,7 +12,10 @@ async fn smoke_run_once_with_fixtures_keeps_some() {
         Box::new(FedRssProvider::from_fixture(fed_xml)),
         Box::new(ReutersRssProvider::from_fixture(reu_xml)),
     ];
-    let (kept, _filtered, _dedup) =
-        ingest::run_once(&providers, &vec!["Fed".into(), "Reuters".into()], 600).await;
+
+    // Avoid &vec![...] (clippy::useless-vec)
+    let whitelist = vec!["Fed".to_string(), "Reuters".to_string()];
+    let (kept, _filtered, _dedup) = ingest::run_once(&providers, &whitelist, 600).await;
+
     assert!(!kept.is_empty());
 }

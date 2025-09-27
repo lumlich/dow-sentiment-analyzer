@@ -1,4 +1,19 @@
-[
-  "Fed",
-  "Reuters"
-]
+{
+  "version": 1,
+  "allow_tags": [
+    "www.federalreserve.gov",
+    "www.ecb.europa.eu",
+    "www.stlouisfed.org",
+    "apnews.com",
+    "feeds.content.dowjones.io",
+    "rss.cnn.com",
+    "feeds.reuters.com",
+    "www.marketwatch.com",
+    "www.cnn.com",
+    "www.reuters.com",
+    "www.wsj.com",
+    "www.ft.com",
+    "www.bloomberg.com"
+  ],
+  "deny_tags": []
+}

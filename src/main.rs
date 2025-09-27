@@ -1,60 +1,50 @@
-//! Shuttle entrypoint: build top-level Axum app, serve the SPA UI + static assets,
+//! Shuttle entrypoint: build the top-level Axum app, serve the SPA UI + static assets,
 //! mount the existing API under /api, start the ingest scheduler, and load secrets.
-//! All public comments are in English.
+//! All publicly visible comments are in English.
 
-use serde::Serialize;
 use shuttle_axum::axum::{
     extract::Path,
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderName, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::get,
     Router,
 };
 use shuttle_axum::ShuttleAxum;
 use shuttle_runtime::SecretStore;
+
+// --- redirect middleware imports ---
+use shuttle_axum::axum::extract::Request;
+use shuttle_axum::axum::middleware::{self, Next}; // správný alias v axum 0.8
+
 use std::{path::PathBuf, time::Duration};
 use tower::ServiceBuilder;
-use tower_http::{compression::CompressionLayer, trace::TraceLayer};
-use tracing::{info, warn};
+use tower_http::{
+    compression::CompressionLayer,
+    limit::RequestBodyLimitLayer, // requires tower-http feature "limit"
+    set_header::SetResponseHeaderLayer,
+    trace::TraceLayer,
+};
+use tracing::info;
 
 // ----- UI embedding -----
-// Embed the ALREADY-BUNDLED SPA entry from ./assets (present both locally and in Shuttle build assets)
 const INDEX_HTML: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/index.html"));
 
-#[derive(Serialize)]
-struct VersionInfo {
-    name: &'static str,
-    version: &'static str,
-}
+// ----- Security headers (constants) -----
+const CSP_VALUE: &str = "\
+default-src 'self'; \
+script-src 'self'; \
+style-src 'self' 'unsafe-inline'; \
+img-src 'self' data:; \
+font-src 'self' data:; \
+connect-src 'self'; \
+frame-ancestors 'none'; \
+base-uri 'none'; \
+object-src 'none'";
 
-async fn version() -> shuttle_axum::axum::Json<VersionInfo> {
-    shuttle_axum::axum::Json(VersionInfo {
-        name: env!("CARGO_PKG_NAME"),
-        version: env!("CARGO_PKG_VERSION"),
-    })
-}
-
-async fn health() -> &'static str {
-    "ok"
-}
-
-/// Return the embedded index.html with a no-store cache directive.
-/// Assets are long-cached; index is never cached to always pick the latest hashed filenames.
-fn index_response() -> impl IntoResponse {
-    let headers = [
-        (header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8")),
-        (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
-    ];
-    (headers, Html(INDEX_HTML))
-}
-
-async fn index_html() -> impl IntoResponse {
-    index_response()
-}
+const PERMISSIONS_POLICY_VALUE: &str = "geolocation=(), camera=(), microphone=()";
+const HSTS_VALUE: &str = "max-age=31536000; includeSubDomains";
 
 // ----- Secrets -----
-
-/// Load selected keys from Shuttle `SecretStore` into process env so downstream code can `std::env::var` them.
 fn load_secrets_into_env(secrets: &SecretStore) {
     const KEYS: &[&str] = &[
         // AI
@@ -72,8 +62,13 @@ fn load_secrets_into_env(secrets: &SecretStore) {
         "INGEST_INTERVAL_SECS",
         "INGEST_DEDUP_WINDOW_SECS",
         "INGEST_WHITELIST_PATH",
-        // CORS (if used in API)
+        // CORS
         "ALLOWED_ORIGINS",
+        // Observability
+        "METRICS_ENABLED",
+        // Security / limits
+        "HSTS_ENABLED",
+        "API_BODY_LIMIT_BYTES",
     ];
     for k in KEYS {
         if let Some(v) = secrets.get(k) {
@@ -82,24 +77,26 @@ fn load_secrets_into_env(secrets: &SecretStore) {
     }
 }
 
-// ----- Static file helpers (replace ServeDir/ServeFile to avoid handle_error type issues) -----
-
+// ----- Static file helpers -----
 fn sanitize_segment(seg: &str) -> bool {
-    // Reject dangerous segments to prevent path traversal
     !seg.is_empty() && seg != "." && seg != ".." && !seg.contains('\\')
 }
 
 async fn read_file_response(full: PathBuf, cache_control: &'static str) -> Response {
     match tokio::fs::read(&full).await {
         Ok(bytes) => {
-            // Guess content-type with fallback to octet-stream
             let guessed = mime_guess::from_path(&full).first_or_octet_stream();
             let ct = HeaderValue::from_str(guessed.as_ref())
                 .unwrap_or(HeaderValue::from_static("application/octet-stream"));
 
-            let mut resp =
-                ([(header::CACHE_CONTROL, HeaderValue::from_static(cache_control))], bytes)
-                    .into_response();
+            let mut resp = (
+                [(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static(cache_control),
+                )],
+                bytes,
+            )
+                .into_response();
             resp.headers_mut().insert(header::CONTENT_TYPE, ct);
             resp
         }
@@ -108,15 +105,12 @@ async fn read_file_response(full: PathBuf, cache_control: &'static str) -> Respo
 }
 
 async fn assets_handler(Path(path): Path<String>) -> Response {
-    // Only allow safe segments
     let safe: Vec<&str> = path.split('/').filter(|s| sanitize_segment(s)).collect();
     let full = PathBuf::from("assets").join(safe.join("/"));
-    // Long immutable cache for hashed assets
     read_file_response(full, "public, max-age=31536000, immutable").await
 }
 
 async fn favicon_handler() -> Response {
-    // Try root favicon.ico first (if present), then assets/favicon.ico, else 404
     if tokio::fs::metadata("favicon.ico").await.is_ok() {
         read_file_response(PathBuf::from("favicon.ico"), "public, max-age=86400").await
     } else {
@@ -124,13 +118,33 @@ async fn favicon_handler() -> Response {
     }
 }
 
-// ----- Ingest scheduler (LIVE providers) -----
+fn index_response() -> impl IntoResponse {
+    let headers = [
+        (
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        ),
+        (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+    ];
+    (headers, Html(INDEX_HTML))
+}
 
+async fn index_html() -> impl IntoResponse {
+    index_response()
+}
+
+// ----- Ingest scheduler -----
 use dow_sentiment_analyzer::{
     api,
-    ingest::{self, providers::{fed_rss::FedRssProvider, reuters_rss::ReutersRssProvider}, types::SourceProvider},
+    ingest::{
+        self,
+        providers::{fed_rss::FedRssProvider, reuters_rss::ReutersRssProvider},
+        types::SourceProvider,
+    },
     relevance::AppState,
+    versions,
 };
+use shuttle_shared_db::SerdeJsonOperator;
 
 async fn run_ingest_scheduler(_app_state: AppState) {
     let enabled = std::env::var("INGEST_ENABLED").unwrap_or_else(|_| "false".into()) == "true";
@@ -140,10 +154,14 @@ async fn run_ingest_scheduler(_app_state: AppState) {
     }
 
     let interval_secs: u64 = std::env::var("INGEST_INTERVAL_SECS")
-        .ok().and_then(|s| s.parse().ok()).unwrap_or(300);
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300);
 
     let dedup_window_secs: u64 = std::env::var("INGEST_DEDUP_WINDOW_SECS")
-        .ok().and_then(|s| s.parse().ok()).unwrap_or(600);
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(600);
 
     info!("starting ingest scheduler (every {interval_secs}s)");
     let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
@@ -151,16 +169,13 @@ async fn run_ingest_scheduler(_app_state: AppState) {
     loop {
         ticker.tick().await;
 
-        // Load whitelist (env path -> TOML -> JSON -> empty)
         let whitelist = ingest::config::load_whitelist_default().unwrap_or_default();
 
-        // Build providers (network)
         let providers: Vec<Box<dyn SourceProvider>> = vec![
             Box::new(FedRssProvider::new()),
             Box::new(ReutersRssProvider::new()),
         ];
 
-        // Run pipeline once
         let (kept, filtered, dedup) =
             ingest::run_once(&providers, &whitelist, dedup_window_secs).await;
 
@@ -173,42 +188,124 @@ async fn run_ingest_scheduler(_app_state: AppState) {
     }
 }
 
-// ----- Shuttle entrypoint -----
+// 301 redirect for apex -> www, preserves path+query (axum 0.8 signature)
+async fn redirect_apex_to_www(req: Request, next: Next) -> Response {
+    let host = req
+        .headers()
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    if host.eq_ignore_ascii_case("dowsentiment.app") {
+        let pq = req
+            .uri()
+            .path_and_query()
+            .map(|x| x.as_str())
+            .unwrap_or("/");
+        let loc = format!("https://www.dowsentiment.app{}", pq);
+        return (
+            StatusCode::MOVED_PERMANENTLY,
+            [(header::LOCATION, HeaderValue::from_str(&loc).unwrap())],
+        )
+            .into_response();
+    }
+    next.run(req).await
+}
 
+// ----- Shuttle entrypoint -----
 #[shuttle_runtime::main]
 async fn axum(
     #[shuttle_runtime::Secrets] secrets: SecretStore,
+    #[shuttle_shared_db::Postgres] last_store: SerdeJsonOperator,
 ) -> ShuttleAxum {
-    // 1) Make secrets available to the rest of the code (AI adapter, etc.)
+    // 1) Secrets -> env
     load_secrets_into_env(&secrets);
 
-    // 2) Build the existing library API router and mount it under /api
-    //    IMPORTANT: do not modify `src/api.rs`; we reuse its public `router(...)`.
-    let state = AppState::from_env();
-    let api_router = api::router(state.clone());
+    // 2) App state + API router
+    let app_state = AppState::from_env();
+    let last = dow_sentiment_analyzer::last::LastStore::new(last_store);
+    let api_router = api::router_with_last(app_state.clone(), last).without_v07_checks();
 
-    // 3) Start ingest scheduler
-    tokio::spawn(run_ingest_scheduler(state));
+    // Optional: body limit for all /api (covers /api/decide)
+    let api_body_limit_bytes: usize = std::env::var("API_BODY_LIMIT_BYTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(131_072); // 128 KiB
 
-    // 4) Compose the top-level app: UI + system endpoints + nested API
-    let app = Router::new()
-        // UI + static
-        .route("/", get(index_html))
-        .route("/assets/*path", get(assets_handler)) // <-- Axum wildcard syntax
-        .route("/favicon.ico", get(favicon_handler))
-        // SPA fallback
-        .fallback(get(index_html))
+    let api_router = if api_body_limit_bytes > 0 {
+        api_router.layer(RequestBodyLimitLayer::new(api_body_limit_bytes))
+    } else {
+        api_router
+    };
+
+    // 3) Ingest scheduler
+    tokio::spawn(run_ingest_scheduler(app_state));
+
+    // 4) Security & utility layers
+    let hsts_enabled = std::env::var("HSTS_ENABLED")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    let sec = ServiceBuilder::new()
+        .layer(TraceLayer::new_for_http())
+        .layer(CompressionLayer::new())
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static(PERMISSIONS_POLICY_VALUE),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static(CSP_VALUE),
+        ))
+        // Conditional HSTS:
+        .option_layer(if hsts_enabled {
+            Some(SetResponseHeaderLayer::if_not_present(
+                HeaderName::from_static("strict-transport-security"),
+                HeaderValue::from_static(HSTS_VALUE),
+            ))
+        } else {
+            None
+        });
+
+    // 5) Top-level router (order matters: redirect first, then security)
+    let mut app = Router::new()
         // System endpoints
-        .route("/_version", get(version))
-        .route("/_health", get(health))
-        // API mounted under /api
+        .route("/_version", get(versions::handler))
+        .route("/_health", get(|| async { "ok" }))
+        // Static
+        .route("/favicon.ico", get(favicon_handler))
+        .route("/assets/{*path}", get(assets_handler))
+        // UI + SPA fallback
+        .route("/", get(index_html))
+        .route("/{*path}", get(index_html))
+        // API
         .nest("/api", api_router)
-        // Useful layers
-        .layer(
-            ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
-                .layer(CompressionLayer::new()),
-        );
+        // 1) inner: apex -> www redirect
+        .layer(middleware::from_fn(redirect_apex_to_www))
+        // 2) outer: security + utility headers (applies also to 301)
+        .layer(sec);
 
+    // Optional metrics at /metrics
+    let metrics_enabled = std::env::var("METRICS_ENABLED")
+        .ok()
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if metrics_enabled {
+        // Use the tiny helper router from crate::metrics
+        app = app.merge(dow_sentiment_analyzer::metrics::router());
+    }
+
+    let app = app.without_v07_checks();
     Ok(app.into())
 }

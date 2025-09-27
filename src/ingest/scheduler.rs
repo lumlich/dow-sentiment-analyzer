@@ -1,9 +1,4 @@
 // src/ingest/scheduler.rs
-use crate::ingest::{
-    providers::{fed_rss::FedRssProvider, reuters_rss::ReutersRssProvider},
-    types::SourceProvider,
-};
-use metrics::{counter, gauge};
 use tokio::task::JoinHandle;
 
 #[derive(Clone, Copy, Debug)]
@@ -16,6 +11,11 @@ pub struct IngestSchedulerCfg {
 /// Requires feature `ingest-fixtures`.
 #[cfg(feature = "ingest-fixtures")]
 pub fn spawn_fixture_scheduler(cfg: IngestSchedulerCfg, whitelist: Vec<String>) -> JoinHandle<()> {
+    // Imports only when this function is compiled
+    use crate::ingest::providers::{fed_rss::FedRssProvider, reuters_rss::ReutersRssProvider};
+    use crate::ingest::SourceProvider;
+    use metrics::{counter, gauge};
+
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(cfg.interval_secs));
         loop {

@@ -1,147 +1,177 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result};
-use async_trait::async_trait;
-use metrics::{counter, histogram};
-use quick_xml::de::from_str;
-use serde::Deserialize;
-use time::{format_description::well_known::Rfc2822, OffsetDateTime, UtcOffset};
+use chrono::{DateTime, Utc};
+use feed_rs::model::{Entry, Link};
+use feed_rs::parser;
+use reqwest::Client;
 
-use crate::ingest::types::{SourceEvent, SourceProvider};
+use super::{Provider, ProviderItem}; // Provider = SourceProvider, ProviderItem = SourceEvent
 
-#[derive(Debug, Deserialize)]
-struct Rss {
-    channel: Channel,
-}
-#[derive(Debug, Deserialize)]
-struct Channel {
-    #[serde(rename = "item")]
-    item: Vec<Item>,
-}
-#[derive(Debug, Deserialize)]
-struct Item {
-    title: Option<String>,
-    link: Option<String>,
-    #[serde(rename = "pubDate")]
-    pub_date: Option<String>,
-    description: Option<String>,
-}
-
-fn parse_rfc2822_to_unix(ts: &str) -> u64 {
-    OffsetDateTime::parse(ts, &Rfc2822)
-        .ok()
-        .map(|dt| dt.to_offset(UtcOffset::UTC).unix_timestamp())
-        .and_then(|x| u64::try_from(x).ok())
-        .unwrap_or(0)
-}
-
+/// Federal Reserve – unified RSS/Atom provider.
 pub struct FedRssProvider {
-    mode: Mode,
-}
-
-enum Mode {
-    // Ukládáme vlastní kopii, aby odpadl požadavek na 'static ve testech.
-    #[cfg(feature = "ingest-fixtures")]
-    Fixture(String),
-    #[cfg(feature = "ingest-http")]
-    Http {
-        url: &'static str,
-        client: reqwest::Client,
-    },
+    client: Client,
+    feed_url: String,
+    /// If present, provider will parse from this XML instead of doing HTTP.
+    fixture_xml: Option<String>,
 }
 
 impl FedRssProvider {
-    #[cfg(feature = "ingest-fixtures")]
-    pub fn from_fixture(s: &'static str) -> Self {
+    pub fn new() -> Self {
+        Self::new_with_url("https://www.federalreserve.gov/feeds/press_all.xml")
+    }
+
+    pub fn new_with_url(url: &str) -> Self {
+        let client = Client::builder()
+            .user_agent("dow-sentiment-analyzer/1.0 (+https://shuttle.app)")
+            .timeout(Duration::from_secs(15))
+            .build()
+            .expect("reqwest client");
         Self {
-            mode: Mode::Fixture(s.to_string()),
+            client,
+            feed_url: url.to_string(),
+            fixture_xml: None,
         }
     }
 
-    // Nové: přijme libovolné &str (např. po dekódování), interně zkopíruje.
-    #[cfg(feature = "ingest-fixtures")]
-    pub fn from_fixture_str(s: &str) -> Self {
+    /// Constructor for tests/fixtures with a 'static XML slice.
+    pub fn from_fixture(xml: &'static str) -> Self {
+        let client = Client::builder()
+            .user_agent("dow-sentiment-analyzer/1.0 (+https://shuttle.app)")
+            .timeout(Duration::from_secs(15))
+            .build()
+            .expect("reqwest client");
         Self {
-            mode: Mode::Fixture(s.to_string()),
+            client,
+            feed_url: "fixture://fed".to_string(),
+            fixture_xml: Some(xml.to_string()),
         }
     }
 
-    #[cfg(feature = "ingest-http")]
-    pub fn from_url(url: &'static str) -> Self {
-        let client = reqwest::Client::new();
+    /// Constructor for tests/fixtures with a borrowed XML string.
+    pub fn from_fixture_str(xml: &str) -> Self {
+        let client = Client::builder()
+            .user_agent("dow-sentiment-analyzer/1.0 (+https://shuttle.app)")
+            .timeout(Duration::from_secs(15))
+            .build()
+            .expect("reqwest client");
         Self {
-            mode: Mode::Http { url, client },
+            client,
+            feed_url: "fixture://fed".to_string(),
+            fixture_xml: Some(xml.to_string()),
         }
     }
 
-    fn parse_items_from_str(s: &str) -> Result<Vec<SourceEvent>> {
-        let t0 = std::time::Instant::now();
-        let xml_clean = scrub_html_entities_for_xml(s);
-        let rss: Rss = from_str(&xml_clean).context("parsing fed rss xml")?;
+    async fn fetch_bytes(&self) -> Result<Vec<u8>> {
+        if let Some(xml) = &self.fixture_xml {
+            return Ok(xml.as_bytes().to_vec());
+        }
 
-        let mut out = Vec::with_capacity(rss.channel.item.len());
-        for it in rss.channel.item {
-            let text_raw = format!(
-                "{}. {}",
-                it.title.as_deref().unwrap_or_default(),
-                it.description.as_deref().unwrap_or_default()
-            );
-            let text = crate::ingest::normalize_text(&text_raw);
-            if text.is_empty() {
-                continue;
+        let res = self
+            .client
+            .get(&self.feed_url)
+            .send()
+            .await
+            .with_context(|| format!("GET {}", self.feed_url))?;
+
+        let status = res.status();
+        let bytes = res.bytes().await.context("reading feed body")?;
+        anyhow::ensure!(
+            status.is_success(),
+            "HTTP {} for {}",
+            status.as_u16(),
+            self.feed_url
+        );
+        Ok(bytes.to_vec())
+    }
+
+    fn is_html(l: &Link) -> bool {
+        l.media_type
+            .as_deref()
+            .map(|mt| mt.starts_with("text/html"))
+            .unwrap_or(false)
+    }
+
+    fn pick_url(entry: &Entry) -> Option<String> {
+        entry
+            .links
+            .iter()
+            .find(|l| l.rel.as_deref() == Some("alternate"))
+            .or_else(|| entry.links.iter().find(|l| Self::is_html(l)))
+            .or_else(|| entry.links.first())
+            .map(|l| l.href.clone())
+    }
+
+    fn published_utc(entry: &Entry) -> DateTime<Utc> {
+        if let Some(p) = entry.published {
+            return p.with_timezone(&Utc);
+        }
+        if let Some(u) = entry.updated {
+            return u.with_timezone(&Utc);
+        }
+        Utc::now()
+    }
+
+    fn entry_to_item(entry: Entry) -> ProviderItem {
+        let title = entry
+            .title
+            .as_ref()
+            .map(|t| t.content.clone())
+            .unwrap_or_default();
+
+        let summary = entry.summary.as_ref().map(|s| s.content.clone());
+        let url = Self::pick_url(&entry);
+        let ts = Self::published_utc(&entry).timestamp().max(0) as u64;
+
+        // Compose one-line text (title + short summary)
+        let mut text = String::new();
+        if !title.is_empty() {
+            text.push_str(&title);
+        }
+        if let Some(s) = summary.as_ref() {
+            let s = s.replace('\n', " ").trim().to_string();
+            if !s.is_empty() {
+                if !text.is_empty() {
+                    text.push_str(" — ");
+                }
+                let snippet = if s.len() > 280 {
+                    format!("{}…", &s[..280])
+                } else {
+                    s
+                };
+                text.push_str(&snippet);
             }
-
-            out.push(SourceEvent {
-                source: "Fed".to_string(),
-                published_at: it
-                    .pub_date
-                    .as_deref()
-                    .map(parse_rfc2822_to_unix)
-                    .unwrap_or(0),
-                text,
-                url: it.link,
-                priority_hint: Some(0.9),
-            });
         }
 
-        let ms = t0.elapsed().as_secs_f64() * 1_000.0;
-        histogram!("ingest_parse_ms").record(ms);
-        counter!("ingest_events_total").increment(out.len() as u64);
-        Ok(out)
+        ProviderItem {
+            source: "Fed".to_string(),
+            published_at: ts,
+            text,
+            url,
+            priority_hint: None,
+        }
     }
 }
 
-#[async_trait]
-impl SourceProvider for FedRssProvider {
-    async fn fetch_latest(&self) -> Result<Vec<SourceEvent>> {
-        match &self.mode {
-            #[cfg(feature = "ingest-fixtures")]
-            Mode::Fixture(s) => Self::parse_items_from_str(s),
-
-            #[cfg(feature = "ingest-http")]
-            Mode::Http { url, client } => {
-                let body = match client.get(*url).send().await {
-                    Ok(resp) => resp.text().await.context("fed http .text()")?,
-                    Err(e) => {
-                        tracing::warn!(error = ?e, provider = "Fed", "provider http error");
-                        counter!("ingest_provider_errors_total").increment(1);
-                        return Err(e).context("fed http get()");
-                    }
-                };
-                Self::parse_items_from_str(&body)
-            }
-        }
+impl Default for FedRssProvider {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
+#[async_trait::async_trait]
+impl Provider for FedRssProvider {
     fn name(&self) -> &'static str {
         "Fed"
     }
-}
 
-fn scrub_html_entities_for_xml(s: &str) -> String {
-    s.replace("&nbsp;", " ")
-        .replace("&ndash;", "-")
-        .replace("&mdash;", "-")
-        .replace("&ldquo;", "\"")
-        .replace("&rdquo;", "\"")
-        .replace("&lsquo;", "'")
-        .replace("&rsquo;", "'")
+    async fn fetch_latest(&self) -> Result<Vec<ProviderItem>> {
+        let bytes = self.fetch_bytes().await?;
+        let feed = parser::parse(&bytes[..]).context("parsing feed")?;
+        let mut out = Vec::with_capacity(feed.entries.len());
+        for e in feed.entries {
+            out.push(Self::entry_to_item(e));
+        }
+        Ok(out)
+    }
 }

@@ -8,7 +8,9 @@ use tower::ServiceExt;
 /// Enable via: `cargo test --features strict-e2e --test ingest_e2e`
 #[tokio::test]
 async fn strict_ingest_e2e_decide_smoke() {
-    let app = dow_sentiment_analyzer::app().await.expect("build app");
+    let app = dow_sentiment_analyzer::api::app()
+        .await
+        .expect("app() should build Router");
 
     let req = Request::builder()
         .method("POST")

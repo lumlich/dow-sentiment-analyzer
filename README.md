@@ -1,4 +1,4 @@
-# dow-sentiment-analyzer — v0.4.0 (Phase 6: Ingest & Metrics)
+﻿# dow-sentiment-analyzer — v0.4.0 (Phase 6: Ingest & Metrics)
 
 [![CI](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/ci.yml)
 [![Security Audit](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/audit.yml/badge.svg)](https://github.com/lumlich/dow-sentiment-analyzer/actions/workflows/audit.yml)
@@ -243,4 +243,3 @@ SLACK_WEBHOOK_URL, DISCORD_WEBHOOK_URL, EMAIL_ENABLED
 ## Contributing
 
 Open an Issue with `feat:` or `bug:` prefix; PRs welcome.
-

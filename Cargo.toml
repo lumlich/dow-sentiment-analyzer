@@ -35,7 +35,7 @@ reqwest = { version = "0.12", default-features = true, features = ["json"] }
 async-trait = "0.1"
 
 # Shuttle 0.56.x
-shuttle-runtime = "0.56.0"
+shuttle-runtime = "0.57.0"
 shuttle-axum   = "0.56.0"
 # NEW: Shared Postgres JSON store (OpenDAL) for "last decision"
 shuttle-shared-db = { version = "0.56.0", features = ["postgres", "opendal-postgres"] }

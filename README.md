@@ -243,4 +243,3 @@ SLACK_WEBHOOK_URL, DISCORD_WEBHOOK_URL, EMAIL_ENABLED
 ## Contributing
 
 Open an Issue with `feat:` or `bug:` prefix; PRs welcome.
-

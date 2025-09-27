@@ -1,0 +1,39 @@
+﻿name: Security audit
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+  schedule:
+    - cron: '0 3 * * 1'   # každé pondělí 03:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo-audit bin
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo
+          key: cargo-audit-v0.21.2
+
+      - name: Cargo audit (ignore mysql/rsa advisory only)
+        uses: actions-rust-lang/audit@v1
+        with:
+          denyWarnings: true
+          ignore: |
+            RUSTSEC-2023-0071

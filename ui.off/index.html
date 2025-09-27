@@ -1,0 +1,57 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DOW Sentiment Analyzer</title>
+    <link rel="icon" href="/favicon.ico" />
+    <!-- Prefer dark UI for form controls/scrollbars and address bar tint -->
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#070b12" />
+
+    <!--
+      Content Security Policy — DEV (Vite HMR + local Shuttle)
+      - allow HMR/websocket and local API during development
+      - 'style-src' keeps 'unsafe-inline' kvůli progress bar inline stylu (viz poznámka)
+      - PROD varianta je níže v komentáři; při nasazení ji můžeš přepnout.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self';
+      style-src 'self' 'unsafe-inline';
+      img-src 'self' data:;
+      connect-src 'self' http://127.0.0.1:8000 http://localhost:8000 http://localhost:5173 http://localhost:5174 ws: http:;
+      font-src 'self' data:;
+      object-src 'none';
+      base-uri 'self';
+      form-action 'self'
+    ">
+
+    <!--
+      Content Security Policy — PROD (přepni při nasazení, přísnější connect-src)
+      POZN.: Pokud přepneš na tuto variantu, nech jen jednu CSP meta (neduplikovat).
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self';
+      style-src 'self' 'unsafe-inline';
+      img-src 'self' data:;
+      connect-src 'self';
+      font-src 'self' data:;
+      object-src 'none';
+      base-uri 'self';
+      form-action 'self';
+      upgrade-insecure-requests
+    ">
+    -->
+
+    <!-- Bezpečnostní hlavičky ekvivalentní k HTTP variantám -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+
+    <!-- Referrer policy (platná přes <meta name="referrer">) -->
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

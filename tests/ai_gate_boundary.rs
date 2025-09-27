@@ -1,6 +1,7 @@
 //! AI gating boundary & extraction tests adapted to current signatures:
 //!   - extract_threshold_from_reasons(&Relevance) -> Option<f32>
 //!   - ai_gate_should_call(&str, &Relevance) -> bool
+//!
 //! Uses Relevance::test_new(...) helper defined in src/relevance.rs.
 
 use dow_sentiment_analyzer::relevance::{ai_gate_should_call, extract_threshold_from_reasons};

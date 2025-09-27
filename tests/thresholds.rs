@@ -12,14 +12,12 @@ use serde::Deserialize;
 use tokio::sync::OnceCell;
 use tower::ServiceExt; // for `oneshot`
 
-use dow_sentiment_analyzer::app;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 enum DecisionKind {
-    BUY,
-    SELL,
-    HOLD,
+    Buy,
+    Sell,
+    Hold,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,7 +29,7 @@ struct DecideResponse {
 }
 
 impl DecideResponse {
-    fn to_kind(self) -> DecisionKind {
+    fn into_kind(self) -> DecisionKind {
         self.decision
             .or(self.kind)
             .expect("missing decision/kind in response")
@@ -43,7 +41,11 @@ static ROUTER: OnceCell<axum::Router> = OnceCell::const_new();
 
 async fn test_app() -> axum::Router {
     ROUTER
-        .get_or_init(|| async { app().await.expect("app() should build a Router") })
+        .get_or_init(|| async {
+            dow_sentiment_analyzer::api::app()
+                .await
+                .expect("build Router")
+        })
         .await
         .clone()
 }
@@ -66,19 +68,20 @@ async fn call_decide(score: f32) -> (StatusCode, DecisionKind) {
     let body = match parsed {
         Ok(obj) => obj,
         Err(_) => {
+            // Back-compat: endpoint may return just "BUY"/"SELL"/"HOLD" as a string.
             let s: String = serde_json::from_slice(&bytes).expect("invalid /decide string body");
             #[derive(Deserialize)]
             #[serde(rename_all = "UPPERCASE")]
             enum K {
-                BUY,
-                SELL,
-                HOLD,
+                Buy,
+                Sell,
+                Hold,
             }
             let k: K = serde_json::from_str(&format!("\"{s}\"")).expect("invalid decision string");
             let dk = match k {
-                K::BUY => DecisionKind::BUY,
-                K::SELL => DecisionKind::SELL,
-                K::HOLD => DecisionKind::HOLD,
+                K::Buy => DecisionKind::Buy,
+                K::Sell => DecisionKind::Sell,
+                K::Hold => DecisionKind::Hold,
             };
             DecideResponse {
                 decision: Some(dk),
@@ -87,7 +90,7 @@ async fn call_decide(score: f32) -> (StatusCode, DecisionKind) {
         }
     };
 
-    (status, body.to_kind())
+    (status, body.into_kind())
 }
 
 #[inline]
@@ -123,7 +126,7 @@ async fn neutral_midrange() {
     for s in [0.0, 0.2, -0.2] {
         let (st, k) = call_decide(s).await;
         assert_eq!(st, StatusCode::OK);
-        assert_eq!(k, DecisionKind::HOLD, "score {} should be HOLD", s);
+        assert_eq!(k, DecisionKind::Hold, "score {} should be HOLD", s);
     }
 }
 
@@ -134,7 +137,7 @@ async fn buy_threshold_dynamic() {
     let start = 0.10;
     let end = 1.00;
 
-    if let Some(first_buy) = find_first_inclusive(start, end, step, DecisionKind::BUY).await {
+    if let Some(first_buy) = find_first_inclusive(start, end, step, DecisionKind::Buy).await {
         eprintln!("Discovered BUY boundary at {}", first_buy);
 
         // One step below → HOLD
@@ -143,7 +146,7 @@ async fn buy_threshold_dynamic() {
             let (_, k_below) = call_decide(below).await;
             assert_eq!(
                 k_below,
-                DecisionKind::HOLD,
+                DecisionKind::Hold,
                 "Expected HOLD just below BUY boundary"
             );
         }
@@ -152,7 +155,7 @@ async fn buy_threshold_dynamic() {
         let (_, k_at) = call_decide(first_buy).await;
         assert_eq!(
             k_at,
-            DecisionKind::BUY,
+            DecisionKind::Buy,
             "Expected BUY at discovered boundary"
         );
 
@@ -160,7 +163,7 @@ async fn buy_threshold_dynamic() {
         let (_, k_above) = call_decide(round2(first_buy + step)).await;
         assert_eq!(
             k_above,
-            DecisionKind::BUY,
+            DecisionKind::Buy,
             "BUY should persist above boundary"
         );
     } else {
@@ -170,7 +173,7 @@ async fn buy_threshold_dynamic() {
             let (_, k) = call_decide(round2(s)).await;
             assert_eq!(
                 k,
-                DecisionKind::HOLD,
+                DecisionKind::Hold,
                 "Expected HOLD across [{start}, {end}] when no BUY boundary is exposed; got {:?} at {}",
                 k,
                 s
@@ -188,7 +191,7 @@ async fn sell_threshold_dynamic() {
     let start = -1.00;
     let end = -0.10;
 
-    if let Some(first_sell) = find_first_inclusive(start, end, step, DecisionKind::SELL).await {
+    if let Some(first_sell) = find_first_inclusive(start, end, step, DecisionKind::Sell).await {
         eprintln!("Discovered SELL boundary at {}", first_sell);
 
         // One step above (less negative) → HOLD
@@ -197,7 +200,7 @@ async fn sell_threshold_dynamic() {
             let (_, k_above) = call_decide(above).await;
             assert_eq!(
                 k_above,
-                DecisionKind::HOLD,
+                DecisionKind::Hold,
                 "Expected HOLD just above SELL boundary"
             );
         }
@@ -206,7 +209,7 @@ async fn sell_threshold_dynamic() {
         let (_, k_at) = call_decide(first_sell).await;
         assert_eq!(
             k_at,
-            DecisionKind::SELL,
+            DecisionKind::Sell,
             "Expected SELL at discovered boundary"
         );
 
@@ -214,7 +217,7 @@ async fn sell_threshold_dynamic() {
         let (_, k_below) = call_decide(round2(first_sell - step)).await;
         assert_eq!(
             k_below,
-            DecisionKind::SELL,
+            DecisionKind::Sell,
             "SELL should persist below boundary"
         );
     } else {
@@ -224,7 +227,7 @@ async fn sell_threshold_dynamic() {
             let (_, k) = call_decide(round2(s)).await;
             assert_eq!(
                 k,
-                DecisionKind::HOLD,
+                DecisionKind::Hold,
                 "Expected HOLD across [{start}, {end}] when no SELL boundary is exposed; got {:?} at {}",
                 k,
                 s

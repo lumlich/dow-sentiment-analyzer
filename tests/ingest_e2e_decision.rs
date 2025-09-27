@@ -29,7 +29,9 @@ async fn ingest_then_analyze_returns_decisions() {
     assert!(!events.is_empty(), "fixtures should yield events");
 
     // 3) In-process app and POST /analyze
-    let app = dow_sentiment_analyzer::app().await.expect("build app");
+    let app = dow_sentiment_analyzer::api::app()
+        .await
+        .expect("build Router");
 
     for ev in events.into_iter().take(5) {
         let payload = json!({ "text": ev.text });

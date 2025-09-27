@@ -9,19 +9,19 @@
 // - POST /batch
 // - POST /decide  (headers + AI metadata presence)
 
-use serde_json::json;
-use serde_json::Value as Json;
-use shuttle_axum::axum::{
+use axum::{
     body::{self, Body},
     http::{Request, StatusCode},
     Router,
 };
+use serde_json::json;
+use serde_json::Value as Json;
 use tower::ServiceExt as _; // for `oneshot`
 
 use dow_sentiment_analyzer::api;
 use dow_sentiment_analyzer::relevance::AppState as RelevanceAppState;
 
-const BODY_LIMIT: usize = 1 * 1024 * 1024; // 1MB, safe for tests
+const BODY_LIMIT: usize = 1024 * 1024; // 1 MiB
 
 /// Build the same Router the binary uses.
 fn test_router() -> Router {

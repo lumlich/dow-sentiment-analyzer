@@ -1,36 +1,26 @@
+// src/metrics.rs
+//! Minimal Prometheus exporter wiring used by the API to expose `/metrics`.
+//!
+//! - `PROM` je globální handle na Prometheus exporter (naplní ho inicializace v `api.rs`).
+//! - `router()` vrací malý Axum router se `/metrics`, který bezpečně funguje
+//!   i když exporter není nainstalovaný (vrátí benigní text).
+
 use axum::{routing::get, Router};
-use metrics::gauge;
-use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use metrics_exporter_prometheus::PrometheusHandle;
+use once_cell::sync::OnceCell;
 
-pub struct Metrics {
-    pub handle: PrometheusHandle,
-}
+/// Globální Prometheus handle, nastavovaný při bootu (viz `api.rs`).
+pub static PROM: OnceCell<PrometheusHandle> = OnceCell::new();
 
-impl Metrics {
-    /// Initialize Prometheus recorder and expose a static gauge for the cache TTL.
-    pub fn init(ttl_ms: u64) -> Self {
-        // Use default buckets to avoid API differences across crate versions.
-        let builder = PrometheusBuilder::new();
-
-        let handle = builder
-            .install_recorder()
-            .expect("prometheus: install recorder");
-
-        // Static gauge with current TTL (absolute TTL, no sliding refresh)
-        gauge!("ai_decision_cache_ttl_ms").set(ttl_ms as f64);
-
-        Self { handle }
-    }
-
-    /// Returns a router exposing `/metrics` with the Prometheus exposition format.
-    pub fn router(&self) -> Router {
-        let handle = self.handle.clone();
-        Router::new().route(
-            "/metrics",
-            get(move || {
-                let h = handle.clone();
-                async move { h.render() }
-            }),
-        )
-    }
+/// Router s `/metrics`. Když není exporter nainstalovaný,
+/// vrací harmless text "metrics unavailable".
+pub fn router() -> Router {
+    Router::new().route(
+        "/metrics",
+        get(|| async {
+            PROM.get()
+                .map(|h| h.render())
+                .unwrap_or_else(|| "metrics unavailable".to_string())
+        }),
+    )
 }

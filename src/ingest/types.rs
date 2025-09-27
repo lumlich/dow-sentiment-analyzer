@@ -2,7 +2,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct SourceEvent {
     /// Logical source name, e.g., "Fed", "Reuters".
     pub source: String,

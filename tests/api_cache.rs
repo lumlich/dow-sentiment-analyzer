@@ -16,26 +16,19 @@ use axum::{
 };
 use once_cell::sync::Lazy;
 use serde_json::json;
-use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::time::sleep;
+use tokio::{sync::Mutex, time::sleep};
 use tower::ServiceExt; // for oneshot
 
 // --- Global serialization of tests that mutate env / shared cache ---
+// Use async-aware Mutex to avoid clippy::await_holding_lock with std::sync::Mutex.
 static TEST_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
-fn guarded_lock<'a>() -> std::sync::MutexGuard<'a, ()> {
-    match TEST_GUARD.lock() {
-        Ok(g) => g,
-        Err(poison) => poison.into_inner(),
-    }
-}
-
 /// Build the in-process app router the same way as in `tests/api_http.rs`.
-async fn build_app() -> Router {
-    dow_sentiment_analyzer::app()
+async fn build_app() -> axum::Router<()> {
+    dow_sentiment_analyzer::api::app()
         .await
-        .expect("app() should build Router in tests")
+        .expect("build Router")
 }
 
 /// Helper: POST /decide with given text. Returns (status, headers).
@@ -112,7 +105,7 @@ fn with_nonce(nonce: &str, base: &str) -> String {
 
 #[tokio::test]
 async fn cache_miss_then_hit_for_identical_request() {
-    let _lock = guarded_lock();
+    let _lock = TEST_GUARD.lock().await;
     set_common_env("miss_then_hit");
     // Keep TTL sane but not too short; not used in this test specifically
     std::env::set_var("AI_DECISION_CACHE_TTL_MS", "30000");
@@ -142,7 +135,7 @@ async fn cache_miss_then_hit_for_identical_request() {
 
 #[tokio::test]
 async fn cache_miss_when_text_changes_one_char() {
-    let _lock = guarded_lock();
+    let _lock = TEST_GUARD.lock().await;
     set_common_env("one_char_change");
     std::env::set_var("AI_DECISION_CACHE_TTL_MS", "30000");
 
@@ -177,7 +170,7 @@ async fn cache_miss_when_text_changes_one_char() {
 
 #[tokio::test]
 async fn cache_expires_after_ttl_and_turns_into_miss_again() {
-    let _lock = guarded_lock();
+    let _lock = TEST_GUARD.lock().await;
     set_common_env("ttl_expiry");
 
     // Use a short TTL to prove expiration deterministically
@@ -229,7 +222,7 @@ async fn cache_expires_after_ttl_and_turns_into_miss_again() {
 
 #[tokio::test]
 async fn cache_header_is_always_present_and_valid() {
-    let _lock = guarded_lock();
+    let _lock = TEST_GUARD.lock().await;
     set_common_env("diag_presence");
     std::env::set_var("AI_DECISION_CACHE_TTL_MS", "30000");
 
@@ -252,8 +245,3 @@ async fn cache_header_is_always_present_and_valid() {
         val
     );
 }
-
-// (Optional future test)
-// #[ignore = "enable when input normalization is part of cache key semantics"]
-// #[tokio::test]
-// async fn cache_key_is_stable_for_semantically_same_input() { ... }

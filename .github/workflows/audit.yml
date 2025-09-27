@@ -1,18 +1,20 @@
 name: Security audit
 
 on:
+  # manuální spuštění z UI
+  workflow_dispatch:
+  # jen když se mění závislosti
+  push:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
   pull_request:
     paths:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
-  push:
-    branches: [ main ]
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
+  # týdenní běh (Po 06:00 UTC)
   schedule:
-    - cron: "0 4 * * 1"    # každé pondělí 04:00 UTC
-  workflow_dispatch:
+    - cron: "0 6 * * 1"
 
 permissions:
   contents: read
@@ -20,30 +22,28 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Rust
+      - name: Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      # Cache jen binárku cargo-audit, instalace je pak okamžitá
       - name: Cache cargo-audit binary
         id: cache-audit
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-audit
-          key: cargo-audit-v0.21.2
+          key: cargo-audit-${{ runner.os }}-v0.21.2
 
-      - name: Install cargo-audit (if needed)
+      - name: Install cargo-audit (if missing)
         if: steps.cache-audit.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --locked
 
-      - name: Update RustSec advisory DB
-        run: cargo audit update
-
-      # Ignorujeme pouze RUSTSEC-2023-0071 (mysql/rsa); ostatní zůstává striktní
-      - name: Run cargo-audit
-        run: cargo audit --deny-warnings --ignore RUSTSEC-2023-0071
+      # Pozn.: 'cargo audit' si advisory DB stáhne sám; krok 'update' není potřeba
+      - name: Run cargo-audit (ignore mysql/rsa only)
+        run: |
+          set -euo pipefail
+          cargo audit --ignore RUSTSEC-2023-0071

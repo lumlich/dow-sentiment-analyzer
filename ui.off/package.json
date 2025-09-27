@@ -1,0 +1,18 @@
+{
+  "name": "dow-sentiment-analyzer-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/fix-index-paths.mjs",
+    "preview": "vite preview --port 5174"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.9.1",
+    "vite": "^7.1.7"
+  },
+  "dependencies": {
+    "lucide-react": "^0.544.0",
+    "preact": "^10.20.2"
+  }
+}

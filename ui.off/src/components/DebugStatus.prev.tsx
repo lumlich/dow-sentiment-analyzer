@@ -1,5 +1,5 @@
-﻿// src/components/DebugStatus.tsx
-// Dev helper: call absolute API_BASE (no Vite proxy), show quick results.
+// src/components/DebugStatus.tsx
+// Dev helper: calls absolute API_BASE to avoid Vite proxy and shows quick results.
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -15,7 +15,6 @@ export default function DebugStatus() {
   const [decide, setDecide] = useState<DecidePreview | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Health ping (GET)
   useEffect(() => {
     (async () => {
       try {
@@ -28,7 +27,6 @@ export default function DebugStatus() {
     })();
   }, [healthUrl]);
 
-  // Manual /decide test (POST)
   const onTestDecide = async () => {
     setLoading(true);
     setDecide(null);

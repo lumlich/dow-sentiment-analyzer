@@ -1,139 +1,90 @@
-// ui.off/src/components/AlertsInfoBox.tsx
-// Dark-friendly info box with CTA buttons for Discord/Slack.
-// Reads invite URLs from Vite envs: VITE_DISCORD_INVITE, VITE_SLACK_INVITE.
+// src/components/AlertsInfoBox.tsx
+import { FunctionalComponent } from "preact";
+import { ExternalLink, Bell } from "lucide-react";
 
-if (import.meta.env.DEV) {
-  // Only log in dev to avoid noisy console in prod
-  console.log(
-    'VITE env check',
-    import.meta.env.VITE_DISCORD_INVITE,
-    import.meta.env.VITE_SLACK_INVITE
+type LinkBtnProps = {
+  label: string;
+  href?: string;
+  enabled: boolean;
+  titleWhenEnabled: string;
+  titleWhenDisabled: string;
+};
+
+const LinkButton: FunctionalComponent<LinkBtnProps> = ({
+  label,
+  href,
+  enabled,
+  titleWhenEnabled,
+  titleWhenDisabled,
+}) => {
+  // Render <a> as a real link only when enabled; otherwise behave like a disabled button.
+  const commonProps: any = {
+    className: "btn-cta",
+    "aria-disabled": enabled ? "false" : "true",
+    title: enabled ? titleWhenEnabled : titleWhenDisabled,
+    onClick: (e: MouseEvent) => {
+      if (!enabled) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+  };
+
+  return enabled ? (
+    <a {...commonProps} href={href} target="_blank" rel="noreferrer">
+      <span>{label}</span>
+      <ExternalLink width={16} height={16} />
+    </a>
+  ) : (
+    <a {...commonProps} role="button" tabIndex={-1}>
+      <span>{label}</span>
+      <ExternalLink width={16} height={16} />
+    </a>
   );
-}
+};
 
-const DISCORD_INVITE = import.meta.env.VITE_DISCORD_INVITE as string | undefined;
-const SLACK_INVITE = import.meta.env.VITE_SLACK_INVITE as string | undefined;
+const AlertsInfoBox: FunctionalComponent = () => {
+  const discordInvite = import.meta.env.VITE_DISCORD_INVITE as string | undefined;
+  const slackInvite = import.meta.env.VITE_SLACK_INVITE as string | undefined;
 
-// Small helper: detect accidental webhook URLs (these must NOT be in frontend)
-function looksLikeWebhook(url?: string) {
-  if (!url) return false;
-  const u = url.toLowerCase();
-  return u.includes('discord.com/api/webhooks') || u.includes('hooks.slack.com/services');
-}
-
-export default function AlertsInfoBox() {
-  const hasDiscord = Boolean(
-    DISCORD_INVITE && DISCORD_INVITE.trim().length > 0 && !looksLikeWebhook(DISCORD_INVITE)
-  );
-  const hasSlack = Boolean(
-    SLACK_INVITE && SLACK_INVITE.trim().length > 0 && !looksLikeWebhook(SLACK_INVITE)
-  );
-
-  const showMisconfig = looksLikeWebhook(DISCORD_INVITE) || looksLikeWebhook(SLACK_INVITE);
+  const hasDiscord = !!discordInvite;
+  const hasSlack = !!slackInvite;
 
   return (
-    <section className="mx-auto max-w-5xl px-1 sm:px-2">
-      <div
-        className="rounded-2xl border p-6 shadow-sm"
-        style={{
-          background: 'var(--panel)',
-          color: 'var(--text)',
-          borderColor: 'var(--border)',
-        }}
-      >
-        <h2 className="text-2xl font-semibold">Get instant alerts when sentiment changes</h2>
+    <section className="section" aria-labelledby="alerts-title">
+      <div className="panel-header">
+        <h2 id="alerts-title" className="h2">Get instant alerts when sentiment changes</h2>
+      </div>
 
-        <div className="mt-3 space-y-3 text-sm leading-6 opacity-95 max-w-3xl">
-          <p>
-            <strong>Discord</strong> — join via invite, open <code>#alerts</code> and set channel
-            notifications to <em>All messages</em> (recommended).
-          </p>
-          <p>
-            <strong>Slack</strong> — join the workspace, follow <code>#alerts</code> and set channel
-            notifications to <em>All new messages</em> or add keyword alerts (e.g., <code>BUY</code>,{' '}
-            <code>SELL</code>, <code>DOW</code>).
-          </p>
-          <p>📲 Install the mobile app and allow OS notifications.</p>
-          <p>🔔 You&apos;re set — alerts are instant.</p>
-        </div>
+      <p className="small" style={{ marginBottom: 12 }}>
+        Connect a channel to be notified immediately when the decision or confidence shifts.
+      </p>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          <a
-            href={hasDiscord ? DISCORD_INVITE : '#'}
-            onClick={(e) => {
-              if (!hasDiscord) e.preventDefault();
-            }}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-disabled={!hasDiscord}
-            className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium transition ${
-              hasDiscord ? 'cursor-pointer hover:bg-white/5' : 'cursor-not-allowed opacity-50'
-            }`}
-            style={{ borderColor: 'var(--border)', color: 'var(--text)' }}
-          >
-            <span>Join Discord</span>
-            {/* Fixed-size icon to avoid global svg rules */}
-            <svg
-              aria-hidden
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              preserveAspectRatio="xMidYMid meet"
-              style={{ width: 16, height: 16, flex: '0 0 auto' }}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M7 17L17 7M7 7h10v10" />
-            </svg>
-          </a>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
+        <LinkButton
+          label="Join Discord"
+          href={discordInvite}
+          enabled={hasDiscord}
+          titleWhenEnabled="Open Discord (invite/channel)"
+          titleWhenDisabled="Set VITE_DISCORD_INVITE to enable"
+        />
 
-          <a
-            href={hasSlack ? SLACK_INVITE : '#'}
-            onClick={(e) => {
-              if (!hasSlack) e.preventDefault();
-            }}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-disabled={!hasSlack}
-            className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium transition ${
-              hasSlack ? 'cursor-pointer hover:bg-white/5' : 'cursor-not-allowed opacity-50'
-            }`}
-            style={{ borderColor: 'var(--border)', color: 'var(--text)' }}
-          >
-            <span>Join Slack</span>
-            <svg
-              aria-hidden
-              viewBox="0 0 24 24"
-              width="16"
-              height="16"
-              preserveAspectRatio="xMidYMid meet"
-              style={{ width: 16, height: 16, flex: '0 0 auto' }}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M7 17L17 7M7 7h10v10" />
-            </svg>
-          </a>
-        </div>
+        <LinkButton
+          label="Join Slack"
+          href={slackInvite}
+          enabled={hasSlack}
+          titleWhenEnabled="Open Slack (invite/channel)"
+          titleWhenDisabled="Set VITE_SLACK_INVITE to enable"
+        />
 
-        {/* Config hints */}
-        {!hasDiscord && !hasSlack && !showMisconfig && (
-          <p className="mt-2 text-xs opacity-70">
-            Invite links are not configured yet. Set <code>VITE_DISCORD_INVITE</code> and/or{' '}
-            <code>VITE_SLACK_INVITE</code> in <code>ui.off/.env.local</code> and restart the dev server.
-          </p>
-        )}
-
-        {showMisconfig && (
-          <p className="mt-2 text-xs text-amber-300">
-            It looks like you set <em>webhook</em> URLs. For the frontend, use <strong>invite</strong> links:
-            Discord <code>https://discord.gg/…</code>, Slack <code>https://join.slack.com/…</code>. Keep webhook
-            URLs only in the backend.
-          </p>
-        )}
+        <span className="inline-note" style={{ marginLeft: 6 }}>
+          <Bell width={16} height={16} />
+          <span>Install the mobile app and enable OS notifications.</span>
+        </span>
       </div>
     </section>
   );
-}
+};
+
+export default AlertsInfoBox;
+export { AlertsInfoBox };

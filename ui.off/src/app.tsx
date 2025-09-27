@@ -1,386 +1,207 @@
-// ui.off/src/app.tsx
-import { useEffect, useRef, useState } from 'preact/hooks';
-import { VerdictPanel } from './components/VerdictPanel';
-import { WhyPanel } from './components/WhyPanel';
-import { EvidencePanel } from './components/EvidencePanel';
-import type { EvidenceItem } from './components/EvidencePanel';
-import { TrendPanel } from './components/TrendPanel';
-import AlertsInfoBox from './components/AlertsInfoBox';
-import './app.css';
-import DebugStatus from './components/DebugStatus';
+﻿/* app.tsx — production wiring + quick-wins (Freshness TTL, spinner, A11y) */
+import { useEffect, useMemo, useState } from "preact/hooks";
+import type { FunctionalComponent } from "preact";
 
-type Decision = 'BUY' | 'SELL' | 'HOLD';
+import HowToReadBox from "./components/HowToReadBox";
+import AlertsInfoBox from "./components/AlertsInfoBox";
+import VerdictHero from "./components/VerdictHero";
+import PanelHeader from "./components/PanelHeader";
+import EvidenceList from "./components/EvidenceList";
+import TrendPanel, { type TrendPanelProps } from "./components/TrendPanel";
+import DebugStatus from "./components/DebugStatus";
 
-type ApiEvidence = {
-  title?: string;
-  source?: string;
-  url?: string;
-  sentiment?: 'pos' | 'neg' | 'neu';
-  time?: string;
-};
+import { fetchDecide, type Reason, type DecideResponse } from "./lib/api";
+import "./app.css";
 
-type ApiResponse = {
-  decision?: Decision;
-  confidence?: number;
-  reasons?: string[];
-  evidence?: ApiEvidence[];
-  contributors?: string[];
-};
+const HIDE_DEV = ((import.meta as any).env?.VITE_HIDE_DEV ?? "") === "1";
+const FRESH_TTL_MS = Number((import.meta as any).env?.VITE_FRESH_TTL_MS ?? 5 * 60 * 1000); // default 5 min
 
-type Mode = 'decide' | 'analyze';
+export const App: FunctionalComponent = () => {
+  // UI-only state
+  const [reasonsExpanded, setReasonsExpanded] = useState(true);
+  const [evidenceExpanded, setEvidenceExpanded] = useState(true);
 
-// --- Demo input for /decide (replace later with real data) ---
-const DEMO_BATCH = {
-  inputs: [
-    {
-      source: 'demo',
-      author: 'system',
-      text: 'FOMC holds rates; guidance dovish tilt; futures up pre-market.',
-      weight: 1.0,
-      time: new Date().toISOString(),
-    },
-    {
-      source: 'demo',
-      author: 'newswire',
-      text: 'White House signals infrastructure tranche approval.',
-      weight: 0.8,
-      time: new Date().toISOString(),
-    },
-  ],
-};
+  // Data state (real backend)
+  const [verdict, setVerdict] = useState<"BUY" | "SELL" | "HOLD">("HOLD");
+  const [confidence, setConfidence] = useState<number>(0.5);
+  const [topReasons, setTopReasons] = useState<Reason[]>([]);
+  const [evidence, setEvidence] = useState<Reason[]>([]);
+  const [trendVals, setTrendVals] = useState<number[]>([]);
+  const [trendLabels, setTrendLabels] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
-const DECIDE_ENDPOINT = '/decide';
-const ANALYZE_ENDPOINT = '/analyze';
-const LS_KEY = 'useDecide';
-const TREND_MAX = 40;
-
-// Use VITE_API_BASE if provided, otherwise fall back to Vite proxy.
-// Join safely (avoid double slashes) and keep protocol intact.
-const API_BASE = (import.meta as any).env?.VITE_API_BASE ?? '';
-const joinUrl = (base: string, path: string) =>
-  (base ? `${base.replace(/\/+$/,'')}/${path.replace(/^\/+/,'')}` : `/${path.replace(/^\/+/,'')}`)
-    .replace(/\/{2,}/g, '/')
-    .replace(':/', '://');
-
-const DECIDE_URL = joinUrl(API_BASE, DECIDE_ENDPOINT);
-const ANALYZE_URL = joinUrl(API_BASE, ANALYZE_ENDPOINT);
-
-// Read AI headers safely (case-insensitive fallback)
-function readAiHeaders(headers: Headers) {
-  const usedRaw = headers.get('X-AI-Used') ?? headers.get('x-ai-used');
-  const reasonRaw = headers.get('X-AI-Reason') ?? headers.get('x-ai-reason');
-  const aiUsed = usedRaw === '1';
-  const aiReason = reasonRaw ?? '';
-  return { aiUsed, aiReason };
-}
-
-// Normalize /decide response into a shape panels can work with
-function normalizeDecidePayload(
-  raw: unknown
-): { decision?: Decision; confidence?: number; reasons: string[]; evidence: ApiEvidence[] } {
-  let decision: Decision | undefined;
-  let confidence: number | undefined;
-  let reasons: string[] = [];
-  let evidence: ApiEvidence[] = [];
-
-  if (typeof raw === 'string') {
-    const upper = raw.toUpperCase();
-    if (upper === 'BUY' || upper === 'SELL' || upper === 'HOLD') decision = upper as Decision;
-  } else if (raw && typeof raw === 'object') {
-    const obj = raw as any;
-
-    if (typeof obj.decision === 'string') {
-      const upper = obj.decision.toUpperCase();
-      if (upper === 'BUY' || upper === 'SELL' || upper === 'HOLD') decision = upper as Decision;
-    }
-
-    if (typeof obj.confidence === 'number') confidence = obj.confidence;
-
-    if (Array.isArray(obj.reasons)) {
-      reasons = obj.reasons
-        .map((r: any) => (typeof r === 'string' ? r : (r?.message as string | undefined)))
-        .filter((x: unknown): x is string => typeof x === 'string' && x.trim().length > 0);
-    }
-
-    if (Array.isArray(obj.top_contributors)) {
-      evidence = obj.top_contributors.map((c: any) => ({
-        title: (c?.text as string) ?? '',
-        source: (c?.source as string) ?? '',
-        url: '',
-        sentiment: 'neu' as const,
-        time: (c?.ts as string) ?? '',
-      }));
-    }
-  }
-
-  return { decision, confidence, reasons, evidence };
-}
-
-
-function decisionToValue(d?: Decision): number | null {
-  if (!d) return null;
-  if (d === 'BUY') return 1;
-  if (d === 'SELL') return -1;
-  return 0; // HOLD
-}
-
-export function App() {
-  const [data, setData] = useState<ApiResponse>({
-    decision: undefined,
-    confidence: undefined,
-    reasons: [],
-    evidence: [],
-    contributors: [],
-  });
-
-  const [mode, setMode] = useState<Mode>(() => {
-    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(LS_KEY) : null;
-    return saved === '1' ? 'decide' : 'analyze';
-  });
-
-  const [aiUsed, setAiUsed] = useState<boolean>(false);
-  const [aiReason, setAiReason] = useState<string>('');
-  const [netError, setNetError] = useState<string>(''); // NEW: network error banner
-
-  // Simple trend buffer of recent decisions (BUY=1, HOLD=0, SELL=-1)
-  const [trend, setTrend] = useState<Array<{ time: string; value: number }>>([]);
-
-  // Blink + sound on verdict change
-  const lastDecisionRef = useRef<Decision | undefined>(undefined);
-  const verdictWrapRef = useRef<HTMLDivElement | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  // Lazy init sound
+  // Tick to recompute "fresh/stale" age labels
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
   useEffect(() => {
-    if (!audioRef.current) {
-      const a = new Audio('/pling.mp3');
-      audioRef.current = a;
-    }
+    const t = setInterval(() => setNowMs(Date.now()), 15_000); // gentle 15s
+    return () => clearInterval(t);
   }, []);
 
-  // Polling (switchable /decide vs /analyze)
+  // Fetch once on mount
   useEffect(() => {
-    let isMounted = true;
-    let timer: number | undefined;
-
-    const fetchTick = async () => {
+    let mounted = true;
+    (async () => {
       try {
-        setNetError(''); // NEW: clear previous error before fetch
-
-        if (mode === 'decide') {
-          const resp = await fetch(DECIDE_URL, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(DEMO_BATCH),
-          });
-          if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`); // NEW
-
-          const { aiUsed, aiReason } = readAiHeaders(resp.headers);
-          if (!isMounted) return;
-          setAiUsed(aiUsed);
-          setAiReason(aiReason);
-
-          let json: unknown = null;
-          try {
-            json = await resp.json();
-          } catch {
-            json = null;
-          }
-
-          const norm = normalizeDecidePayload(json);
-
-          // Blink & sound on change
-          const prev = lastDecisionRef.current;
-          if (norm.decision && prev && norm.decision !== prev) {
-            if (verdictWrapRef.current) {
-              verdictWrapRef.current.classList.add('blink');
-              window.setTimeout(() => {
-                verdictWrapRef.current && verdictWrapRef.current.classList.remove('blink');
-              }, 600);
-            }
-            if (audioRef.current) {
-              void audioRef.current.play().catch(() => {});
-            }
-          }
-          lastDecisionRef.current = norm.decision;
-
-          setData((old) => ({
-            ...old,
-            decision: norm.decision ?? old.decision,
-            confidence: norm.confidence ?? old.confidence,
-            reasons: norm.reasons,
-            evidence: norm.evidence,
-          }));
-
-          // Trend update on each tick when we have a decision
-          const val = decisionToValue(norm.decision ?? lastDecisionRef.current);
-          if (val !== null) {
-            setTrend((arr) => {
-              const next = [...arr, { time: new Date().toISOString(), value: val }];
-              if (next.length > TREND_MAX) next.shift();
-              return next;
-            });
-          }
-        } else {
-          // /analyze – expects full ApiResponse
-          const resp = await fetch(ANALYZE_URL, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({}),
-          });
-          if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`); // NEW
-
-          if (!isMounted) return;
-          setAiUsed(false);
-          setAiReason('');
-
-          let json: ApiResponse | null = null;
-          try {
-            json = (await resp.json()) as ApiResponse;
-          } catch {
-            json = null;
-          }
-
-          const nextDecision = json?.decision;
-          const prev = lastDecisionRef.current;
-
-          if (nextDecision && prev && nextDecision !== prev) {
-            if (verdictWrapRef.current) {
-              verdictWrapRef.current.classList.add('blink');
-              window.setTimeout(() => {
-                verdictWrapRef.current && verdictWrapRef.current.classList.remove('blink');
-              }, 600);
-            }
-            if (audioRef.current) {
-              void audioRef.current.play().catch(() => {});
-            }
-          }
-          lastDecisionRef.current = nextDecision ?? lastDecisionRef.current;
-
-          if (json) {
-            setData((old) => ({
-              ...old,
-              decision: json.decision ?? old.decision,
-              confidence: json.confidence ?? old.confidence,
-              reasons: json.reasons ?? old.reasons,
-              evidence: json.evidence ?? old.evidence,
-              contributors: json.contributors ?? old.contributors,
-            }));
-          }
-
-          const val = decisionToValue(nextDecision ?? lastDecisionRef.current);
-          if (val !== null) {
-            setTrend((arr) => {
-              const next = [...arr, { time: new Date().toISOString(), value: val }];
-              if (next.length > TREND_MAX) next.shift();
-              return next;
-            });
-          }
-        }
-      } catch (e) {
-        // NEW: visible network error banner
-        setNetError(e instanceof Error ? e.message : String(e));
+        setLoading(true);
+        setError(null);
+        const data: DecideResponse = await fetchDecide();
+        if (!mounted) return;
+        setVerdict(data.verdict);
+        setConfidence(data.confidence);
+        setTopReasons(data.top_reasons ?? []);
+        setEvidence(data.evidence ?? []);
+        setTrendVals(data.trend?.values ?? []);
+        setTrendLabels(data.trend?.labels ?? []);
+        setUpdatedAt(new Date().toISOString());
+      } catch (e: any) {
+        setError(String(e?.message ?? e));
+      } finally {
+        setLoading(false);
       }
-    };
+    })();
+    return () => { mounted = false; };
+  }, []);
 
-    // Immediate tick then interval
-    void fetchTick();
-    timer = window.setInterval(fetchTick, 15000) as unknown as number;
+  function fmtUtc(iso?: string | null): string {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(
+      d.getUTCMinutes()
+    )} UTC`;
+  }
 
-    return () => {
-      isMounted = false;
-      if (timer) window.clearInterval(timer);
-    };
-  }, [mode]);
+  function fmtAge(ms: number): string {
+    if (!isFinite(ms) || ms < 0) return "0s";
+    const s = Math.floor(ms / 1000);
+    const m = Math.floor(s / 60);
+    const remS = s % 60;
+    if (m <= 0) return `${remS}s`;
+    return `${m}m ${remS}s`;
+  }
 
-  // EvidencePanel requires EvidenceItem[]
-  const evidenceItems: EvidenceItem[] = (data.evidence ?? []).map((e) => ({
-    title: e.title ?? '',
-    source: e.source ?? '',
-    url: e.url ?? '',
-    sentiment: e.sentiment ?? 'neu',
-    time: e.time ?? '',
-  }));
+  const freshness = useMemo(() => {
+    if (!updatedAt) return { label: null as string | null, tone: "info" as const };
+    const age = nowMs - new Date(updatedAt).getTime();
+    const tone = age <= FRESH_TTL_MS ? "fresh" : "stale";
+    const label = tone === "fresh" ? `Fresh ≤ ${Math.round(FRESH_TTL_MS / 60000)}m` : `Stale · ${fmtAge(age)} old`;
+    return { label, tone };
+  }, [nowMs, updatedAt]);
 
-  const useDecide = mode === 'decide';
+  // TrendPanel props adapter
+  const trendProps = {
+    title: "Decision confidence trend",
+    series: trendVals,
+    data: trendVals,
+    labels: trendLabels,
+    categories: trendLabels,
+  } as unknown as TrendPanelProps;
 
-  const toggleMode = () => {
-    const next = useDecide ? 'analyze' : 'decide';
-    setMode(next);
-    localStorage.setItem(LS_KEY, next === 'decide' ? '1' : '0');
-  };
+  const Chevron = () => (
+    <svg className="icon chev" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 
   return (
-    <div id="app" class="p-4">
-      {/* Debug bar */}
-      <DebugStatus />
-
-      {/* Network error banner (visible only on failure) */}
-      {netError && (
-        <div
-          style={{
-            marginBottom: '12px',
-            padding: '8px 10px',
-            border: '1px solid var(--border)',
-            borderRadius: 8,
-            background: '#ffecec',
-            color: '#700',
-          }}
-        >
-          Network error: {netError}
-        </div>
-      )}
-
-      {/* Header with AI badge + settings */}
-      <header class="flex items-center justify-between mb-3">
-        <div class="flex items-baseline gap-2">
-          <h1 class="text-xl" style={{ color: 'var(--text)' }}>
-            Dow Sentiment Analyzer
-          </h1>
-          {useDecide && aiUsed && <span class="ai-badge">AI</span>}
-        </div>
-
-        {/* Settings chip */}
-        <button
-          onClick={toggleMode}
-          title="Use /decide instead of /analyze"
-          style={{
-            background: 'var(--panel)',
-            color: 'var(--text)',
-            border: `1px solid var(--border)`,
-            borderRadius: '999px',
-            padding: '6px 10px',
-            cursor: 'pointer',
-            fontSize: '12px',
-          }}
-        >
-          Settings: {useDecide ? 'Use /decide ✓' : 'Use /decide ✗'}
-        </button>
+    <main className="container">
+      <header className="section" aria-label="Header">
+        <h1>DOW Sentiment Analyzer</h1>
+        <p className="small">Live decision engine UI — production wiring</p>
       </header>
 
-      {useDecide && aiUsed && aiReason && (
-        <div class="ai-hint" style={{ marginBottom: '12px' }}>
-          {aiReason}
-        </div>
-      )}
+      <section className="section section-compact" aria-label="How to read this analyzer">
+        <HowToReadBox />
+      </section>
 
-      {/* Instant alerts info box (Discord/Slack) */}
-      <div style={{ marginBottom: '12px' }}>
+      <section className="section" aria-label="Get instant alerts">
         <AlertsInfoBox />
-      </div>
+        {/* copy hint: "You’ll get a ping on verdict/confidence change." */}
+      </section>
 
-      {/* Verdict wrap for blink effect */}
-      <div ref={verdictWrapRef} class="verdict-wrap">
-        <VerdictPanel verdict={data.decision ?? 'HOLD'} confidence={data.confidence} />
-      </div>
+      <section className="section stack-4" aria-label="Main panels">
+        <div className="card" aria-label="Verdict hero">
+          <VerdictHero
+            verdict={verdict}
+            confidence={confidence}
+            loading={loading}
+            updatedAtLabel={fmtUtc(updatedAt)}
+            freshnessLabel={freshness.label}
+            freshnessTone={freshness.tone as any}
+          />
+          {error && <p className="small error" aria-live="assertive">Error: {error}</p>}
+        </div>
 
-      <WhyPanel reasons={data.reasons ?? []} />
-      <EvidencePanel items={evidenceItems} />
+        <div className="card" aria-label="Top reasons">
+          <PanelHeader
+            title="Top reasons"
+            subtitle="Most influential signals driving the decision"
+            actions={
+              <button
+                className="btn-chip"
+                type="button"
+                aria-pressed={reasonsExpanded}
+                aria-controls="reasons-content"
+                onClick={() => setReasonsExpanded((v) => !v)}
+                title={reasonsExpanded ? "Collapse reasons" : "Expand reasons"}
+              >
+                {reasonsExpanded ? "Collapse" : "Expand"} <Chevron />
+              </button>
+            }
+          />
+          <div id="reasons-content" role="region" aria-live="polite">
+            {reasonsExpanded ? <EvidenceList items={(topReasons as any) ?? []} /> : <p className="small">Collapsed.</p>}
+          </div>
+        </div>
 
-      {/* Trend panel (simple sparkline of recent decisions) */}
-      <div style={{ marginTop: '12px' }}>
-        <TrendPanel series={trend} height={72} emphasizeLast={true} title="Sentiment trend" />
-      </div>
-    </div>
+        <div className="card" aria-label="Evidence">
+          <PanelHeader
+            title="Evidence"
+            subtitle="Raw items captured from sources and system rules"
+            actions={
+              <button
+                className="btn-chip"
+                type="button"
+                aria-pressed={evidenceExpanded}
+                aria-controls="evidence-content"
+                onClick={() => setEvidenceExpanded((v) => !v)}
+                title={evidenceExpanded ? "Collapse evidence" : "Expand evidence"}
+              >
+                {evidenceExpanded ? "Collapse" : "Expand"} <Chevron />
+              </button>
+            }
+          />
+          <div id="evidence-content" role="region" aria-live="polite">
+            {evidenceExpanded ? (
+              (evidence?.length ?? 0) > 0 ? (
+                <EvidenceList items={(evidence as any) ?? []} />
+              ) : (
+                <div className="stack-4">
+                  <p className="small">No evidence yet — waiting for fresh items.</p>
+                  <p className="small" style={{ opacity: 0.8 }}>Ingest: ON, next tick in ~5 min.</p>
+                </div>
+              )
+            ) : (
+              <p className="small">Collapsed.</p>
+            )}
+          </div>
+        </div>
+
+        <div className="card" aria-label="Trend">
+          <PanelHeader title="Trend" />
+          {trendVals.length > 0 ? <TrendPanel {...trendProps} /> : <p className="small">No trend yet.</p>}
+        </div>
+      </section>
+
+      {!HIDE_DEV && import.meta.env.DEV && (
+        <section className="section no-print" aria-label="Debug">
+          <DebugStatus />
+        </section>
+      )}
+    </main>
   );
-}
+};
+
+export default App;

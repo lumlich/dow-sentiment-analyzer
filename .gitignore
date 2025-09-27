@@ -102,3 +102,9 @@ dist-ssr
 Thumbs.db
 ehthumbs.db
 desktop.ini
+
+config/ai.json
+
+# Local backups
+.local_backup/
+

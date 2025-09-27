@@ -108,3 +108,7 @@ config/ai.json
 # Local backups
 .local_backup/
 
+
+# Legacy UI folder (replaced by ui.off)
+/ui/
+

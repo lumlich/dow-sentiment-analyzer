@@ -1,32 +1,35 @@
 ﻿name: Security audit
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - ".github/workflows/audit.yml"
+  # Spustí se na PR, jen když se mění Cargo.{toml,lock}
   pull_request:
-    branches: [ main ]
     paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - ".github/workflows/audit.yml"
-  # Týdenní audit i bez změn
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+
+  # Týdenní pravidelný běh (Po 03:00 UTC)
   schedule:
-    - cron: "0 3 * * 1"
+    - cron: '0 3 * * 1'
+
+  # Ruční spuštění z UI
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
       - uses: actions/checkout@v4
 
+      # (Volitelné, ale neškodí) zajistí stable toolchain
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -35,5 +38,8 @@ jobs:
       - name: Cargo audit (ignore mysql/rsa advisory only)
         uses: actions-rust-lang/audit@v1
         with:
-          # POZOR: mezera mezi --ignore a ID (ne "=", jinak se argument nevezme)
-          args: --deny warnings --ignore RUSTSEC-2023-0071
+          # chyby a advisories = fail; jen varování ne
+          denyWarnings: true
+          # KO: 'args' -> OK: 'ignore'
+          ignore: |
+            RUSTSEC-2023-0071

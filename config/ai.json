@@ -1,8 +1,0 @@
-{
-  "enabled": true,
-  "provider": "openai",
-  "daily_limit": 50,
-  "api_key": "ENV",
-  "band_min": 0.35,
-  "band_max": 0.65
-}

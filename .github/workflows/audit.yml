@@ -1,0 +1,39 @@
+﻿name: Security audit
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - ".github/workflows/audit.yml"
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - ".github/workflows/audit.yml"
+  # Týdenní audit i bez změn
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cargo audit (ignore mysql/rsa advisory only)
+        uses: actions-rust-lang/audit@v1
+        with:
+          # POZOR: mezera mezi --ignore a ID (ne "=", jinak se argument nevezme)
+          args: --deny warnings --ignore RUSTSEC-2023-0071

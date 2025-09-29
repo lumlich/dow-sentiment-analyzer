@@ -29,7 +29,7 @@ mime_guess = "2"
 # axum/tower must be in [dependencies] (not only dev-dependencies).
 axum = { version = "0.8", features = ["macros", "json", "tokio", "http1", "query", "original-uri", "matched-path", "form"] }
 tower = "0.5"
-tower-http = { version = "0.5", features = ["cors", "trace", "fs", "set-header", "compression-full", "limit"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "fs", "set-header", "compression-full", "limit"] }
 http = "1"
 reqwest = { version = "0.12", default-features = true, features = ["json"] }
 async-trait = "0.1"

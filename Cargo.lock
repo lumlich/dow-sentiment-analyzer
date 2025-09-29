@@ -618,12 +618,12 @@ dependencies = [
 
 [[package]]
 name = "diesel-async"
-version = "0.5.2"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51a307ac00f7c23f526a04a77761a0519b9f0eb2838ebf5b905a58580095bdcb"
+checksum = "7fcc26599f590c7e5b182a05061cfb445f216bb069df72eb31f38cffde8ca598"
 dependencies = [
- "async-trait",
  "diesel",
+ "futures-core",
  "futures-util",
  "scoped-futures",
  "tokio",
@@ -1911,12 +1911,11 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "opendal"
-version = "0.51.2"
+version = "0.54.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b1063ea459fa9e94584115743b06330f437902dd1d9f692b863ef1875a20548"
+checksum = "ffb9838d0575c6dbaf3fcec7255af8d5771996d4af900bbb6fa9a314dec00a1a"
 dependencies = [
  "anyhow",
- "async-trait",
  "backon",
  "base64",
  "bytes",
@@ -1924,11 +1923,11 @@ dependencies = [
  "futures",
  "getrandom 0.2.16",
  "http",
+ "http-body",
  "log",
  "md-5",
- "once_cell",
  "percent-encoding",
- "quick-xml 0.36.2",
+ "quick-xml 0.37.5",
  "reqwest",
  "serde",
  "serde_json",
@@ -2209,22 +2208,13 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
-dependencies = [
- "memchr",
- "serde",
-]
-
-[[package]]
-name = "quick-xml"
 version = "0.37.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "331e97a1af0bf59823e6eadffe373d7b27f485be8748f71471c662c1f269b7fb"
 dependencies = [
  "encoding_rs",
  "memchr",
+ "serde",
 ]
 
 [[package]]
@@ -2848,7 +2838,7 @@ dependencies = [
  "reqwest-middleware",
  "serde",
  "serde_json",
- "shuttle-common",
+ "shuttle-common 0.56.0",
  "tokio",
  "tokio-tungstenite",
  "url",
@@ -2894,13 +2884,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "shuttle-common"
+version = "0.57.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e5f589b53bec1c0b993883d7a5a80111fcc6a1cbe6220f712ea504c748e83e6"
+dependencies = [
+ "chrono",
+ "http",
+ "semver",
+ "serde",
+ "serde_json",
+ "strum",
+ "typeshare",
+ "zeroize",
+]
+
+[[package]]
 name = "shuttle-ifc"
 version = "0.56.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "370105d6f8606fd69883e11ce6fcb310b618a53071c7a44a4bfac8ce42ad6f05"
 dependencies = [
  "proc-macro2",
- "shuttle-common",
+ "shuttle-common 0.56.0",
  "syn",
 ]
 
@@ -2920,8 +2926,8 @@ dependencies = [
  "serde_json",
  "shuttle-api-client",
  "shuttle-codegen",
- "shuttle-common",
- "shuttle-service",
+ "shuttle-common 0.56.0",
+ "shuttle-service 0.56.0",
  "strfmt",
  "tokio",
  "tracing",
@@ -2937,23 +2943,37 @@ dependencies = [
  "anyhow",
  "async-trait",
  "serde",
- "shuttle-common",
+ "shuttle-common 0.56.0",
+ "strfmt",
+ "thiserror 2.0.16",
+]
+
+[[package]]
+name = "shuttle-service"
+version = "0.57.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0f8400f4ec61f959d696a3ec73ac9de798185999b3d8bf7c79b7e745ba44a14"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "shuttle-common 0.57.0",
  "strfmt",
  "thiserror 2.0.16",
 ]
 
 [[package]]
 name = "shuttle-shared-db"
-version = "0.56.0"
+version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9369ecfc7c3beff95cc2548fb3531e9773d6db2fc2a8381cdde5613ec376fa96"
+checksum = "11916c7bae646e82c3441fbbcbc1451686fcbabe6cc38553bd06f32104cd797e"
 dependencies = [
  "async-trait",
  "diesel-async",
  "opendal",
  "serde",
  "serde_json",
- "shuttle-service",
+ "shuttle-service 0.57.0",
  "sqlx",
 ]
 

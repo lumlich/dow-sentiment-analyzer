@@ -69,6 +69,8 @@ fn load_secrets_into_env(secrets: &SecretStore) {
         // Security / limits
         "HSTS_ENABLED",
         "API_BODY_LIMIT_BYTES",
+        // Optional providers
+        "INGEST_ENABLE_REUTERS",
     ];
     for k in KEYS {
         if let Some(v) = secrets.get(k) {
@@ -90,10 +92,7 @@ async fn read_file_response(full: PathBuf, cache_control: &'static str) -> Respo
                 .unwrap_or(HeaderValue::from_static("application/octet-stream"));
 
             let mut resp = (
-                [(
-                    header::CACHE_CONTROL,
-                    HeaderValue::from_static(cache_control),
-                )],
+                [(header::CACHE_CONTROL, HeaderValue::from_static(cache_control))],
                 bytes,
             )
                 .into_response();
@@ -108,6 +107,13 @@ async fn assets_handler(Path(path): Path<String>) -> Response {
     let safe: Vec<&str> = path.split('/').filter(|s| sanitize_segment(s)).collect();
     let full = PathBuf::from("assets").join(safe.join("/"));
     read_file_response(full, "public, max-age=31536000, immutable").await
+}
+
+async fn config_handler(Path(path): Path<String>) -> Response {
+    // Statické konfigy – no-store, aby se necacheoval JSON/TOML
+    let safe: Vec<&str> = path.split('/').filter(|s| sanitize_segment(s)).collect();
+    let full = PathBuf::from("config").join(safe.join("/"));
+    read_file_response(full, "no-store").await
 }
 
 async fn favicon_handler() -> Response {
@@ -146,6 +152,14 @@ use dow_sentiment_analyzer::{
 };
 use shuttle_shared_db::SerdeJsonOperator;
 
+// simple env truthy helper with default
+fn env_truthy(key: &str, default: bool) -> bool {
+    match std::env::var(key) {
+        Ok(v) => matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+        Err(_) => default,
+    }
+}
+
 async fn run_ingest_scheduler(_app_state: AppState) {
     let enabled = std::env::var("INGEST_ENABLED").unwrap_or_else(|_| "false".into()) == "true";
     if !enabled {
@@ -171,13 +185,19 @@ async fn run_ingest_scheduler(_app_state: AppState) {
 
         let whitelist = ingest::config::load_whitelist_default().unwrap_or_default();
 
-        let providers: Vec<Box<dyn SourceProvider>> = vec![
+        let mut providers: Vec<Box<dyn SourceProvider>> = vec![
             Box::new(FedRssProvider::new()),
-            Box::new(ReutersRssProvider::new()),
         ];
+        // Volitelně Reuters (default ON); vypneš přes INGEST_ENABLE_REUTERS=false
+        if env_truthy("INGEST_ENABLE_REUTERS", true) {
+            providers.push(Box::new(ReutersRssProvider::new()));
+        }
 
         let (kept, filtered, dedup) =
             ingest::run_once(&providers, &whitelist, dedup_window_secs).await;
+
+        // **NEW**: zapiš poslední evidence pro /api/debug/ingest
+        dow_sentiment_analyzer::api::debug_ingest_record(&kept);
 
         info!(
             kept = kept.len(),
@@ -286,6 +306,7 @@ async fn axum(
         // Static
         .route("/favicon.ico", get(favicon_handler))
         .route("/assets/{*path}", get(assets_handler))
+        .route("/config/{*path}", get(config_handler)) // **NEW** – statické konfigy
         // UI + SPA fallback
         .route("/", get(index_html))
         .route("/{*path}", get(index_html))

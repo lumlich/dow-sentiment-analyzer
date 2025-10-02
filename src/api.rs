@@ -1,9 +1,9 @@
 //! HTTP API Layer
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock as StdOnceLock;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock, RwLock, Mutex};
 
 use axum::{
     extract::Query,
@@ -14,6 +14,7 @@ use axum::{
 };
 use serde_json::Value;
 use tower_http::cors::{Any, CorsLayer};
+use once_cell::sync::Lazy;
 
 use crate::disruption::{self, evaluate_with_weights, DisruptionInput};
 use crate::engine;
@@ -42,6 +43,9 @@ use metrics::{
     counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram, Unit,
 };
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+
+// ---- ingest event type for the liveness endpoint ----
+use crate::ingest::types::SourceEvent;
 
 const VOLUME_WINDOW_SECS: u64 = 600; // 10 min
 
@@ -165,6 +169,48 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
     h.finish()
 }
 
+/* -----------------------------
+   LIVENESS: last ingested events
+   ----------------------------- */
+
+#[derive(Clone, serde::Serialize)]
+pub struct UiEvent {
+    pub source: String,
+    pub published_at: u64,
+    pub text: String,
+    pub url: Option<String>,
+}
+
+const EVIDENCE_CAP: usize = 256;
+static EVIDENCE: Lazy<Mutex<VecDeque<UiEvent>>> =
+    Lazy::new(|| Mutex::new(VecDeque::with_capacity(EVIDENCE_CAP)));
+
+/// Volá ingest scheduler po každém ticku (po dedup/filtru) s „kept“ položkami.
+pub fn debug_ingest_record(events: &[SourceEvent]) {
+    if events.is_empty() {
+        return;
+    }
+    let mut buf = EVIDENCE.lock().expect("evidence lock poisoned");
+    for ev in events {
+        if buf.len() == EVIDENCE_CAP {
+            buf.pop_front();
+        }
+        buf.push_back(UiEvent {
+            source: ev.source.clone(),
+            published_at: ev.published_at,
+            text: ev.text.clone(),
+            url: ev.url.clone(),
+        });
+    }
+}
+
+async fn debug_ingest_list(Query(q): Query<HashMap<String, usize>>) -> Json<Vec<UiEvent>> {
+    let limit = q.get("limit").cloned().unwrap_or(30);
+    let buf = EVIDENCE.lock().expect("evidence lock poisoned");
+    let start = buf.len().saturating_sub(limit);
+    Json(buf.iter().skip(start).cloned().collect())
+}
+
 /// Private builder that actually builds the Router.
 /// Public wrappers call into this for prod/test with/without LastStore.
 fn build_router(state_from_main: RelevanceAppState, last: Option<LastStore>) -> Router<()> {
@@ -219,7 +265,7 @@ fn build_router(state_from_main: RelevanceAppState, last: Option<LastStore>) -> 
             .allow_origin(origins)
     };
 
-    // Gate /api/metrics behind METRICS_ENABLED (root /metrics už máš v main.rs taky na branku)
+    // Gate /api/metrics behind METRICS_ENABLED (root /metrics řeší main.rs)
     let metrics_enabled = std::env::var("METRICS_ENABLED")
         .ok()
         .map(|v| v == "1")
@@ -232,7 +278,7 @@ fn build_router(state_from_main: RelevanceAppState, last: Option<LastStore>) -> 
         r = r.route(
             "/metrics",
             get(|| async move {
-                // Render Prometheus exposition format (text/plain; version=0.0.4)
+                // Prometheus exposition format
                 let body = PROM.get().map(|h| h.render()).unwrap_or_default();
                 axum::response::Response::builder()
                     .status(200)
@@ -252,7 +298,9 @@ fn build_router(state_from_main: RelevanceAppState, last: Option<LastStore>) -> 
         // Batch scoring (internal/dev)
         .route("/batch", post(analyze_batch))
         // Decision endpoint: GET = stable shape for change-detector, POST = full decision
-        .route("/decide", get(decide_get).post(decide));
+        .route("/decide", get(decide_get).post(decide))
+        // **NEW** liveness: poslední evidence z ingestu (bez brány)
+        .route("/debug/ingest", get(debug_ingest_list));
 
     // Debug / introspection when enabled
     if debug_routes_enabled() {
@@ -261,10 +309,7 @@ fn build_router(state_from_main: RelevanceAppState, last: Option<LastStore>) -> 
             .route("/debug/history", get(debug_history))
             .route("/debug/last-decision", get(debug_last_decision))
             .route("/debug/source-weight", get(debug_source_weight))
-            .route(
-                "/admin/reload-source-weights",
-                get(admin_reload_source_weights),
-            );
+            .route("/admin/reload-source-weights", get(admin_reload_source_weights));
     }
 
     // Apply CORS and the X-AI-Cache middleware
@@ -416,7 +461,6 @@ async fn analyze(Json(body): Json<AnalyzeReq>) -> Json<AnalyzeOut> {
     Json(out)
 }
 
-/// Batch scoring (internal/dev)
 async fn analyze_batch(Json(items): Json<Vec<BatchItem>>) -> Json<Vec<(BatchItem, i32)>> {
     let state = app_state();
     let t0 = std::time::Instant::now();
@@ -494,7 +538,6 @@ fn ai_reason_counts_as_used(reason: &str) -> bool {
     !blockers.iter().any(|kw| r.contains(kw))
 }
 
-/// AI call is purely async (no `spawn_blocking`) so the handler future stays `Send`.
 async fn ai_analyze_safely(
     ai: Arc<dyn crate::analyze::ai_adapter::AiClient + Send + Sync>,
     ai_corpus: String,
@@ -504,16 +547,12 @@ async fn ai_analyze_safely(
         .map(|ai_out| sanitize_reason(&ai_out.short_reason))
 }
 
-/// GET /decide — stable shape for change-detector, with persisted fallback on cold start.
 async fn decide_get() -> impl IntoResponse {
     let state = app_state();
 
-    // If in-memory history is empty (e.g., right after a cold start),
-    // try to restore the last snapshot so the UI doesn't look empty.
     if state.history.snapshot_last_n(1).is_empty() {
         if let Some(store) = &state.last {
             if let Ok(Some(last)) = store.load::<DecideWithAi>().await {
-                // NOTE: Decision struct has `decision`, not `verdict`.
                 let decision_label = match serde_json::to_value(last.inner.decision).ok() {
                     Some(serde_json::Value::String(s)) => s.to_uppercase(),
                     Some(v) => format!("{:?}", v).to_uppercase(),
@@ -534,7 +573,6 @@ async fn decide_get() -> impl IntoResponse {
         }
     }
 
-    // Original path: use recent history if present
     if let Some(h) = state.history.snapshot_last_n(1).pop() {
         let decision = format!("{:?}", h.verdict).to_uppercase();
         let reasons = vec![format!(
@@ -550,7 +588,6 @@ async fn decide_get() -> impl IntoResponse {
         .into_response();
     }
 
-    // Fallback when no history: HOLD 0.50
     Json(DecideOut {
         decision: "HOLD".into(),
         confidence: 0.50,
@@ -563,8 +600,6 @@ async fn decide_get() -> impl IntoResponse {
 async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
     let t0 = std::time::Instant::now();
 
-    // If the process has just started and history is empty, try to serve
-    // the persisted snapshot immediately so /decide never looks empty.
     {
         let state = app_state();
         if state.history.snapshot_last_n(1).is_empty() {
@@ -581,7 +616,6 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         }
     }
 
-    // -------- 1) BEFORE `await`: build everything from state in a dedicated scope --------
     let (scored, neutralized, total, ai_corpus_opt, now) = {
         let state = app_state();
         let now = current_unix();
@@ -669,13 +703,10 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
             scored.push((bi, gated_score, res));
         }
 
-        // Prepare AI corpus (if any)
         let ai_corpus_opt = if !ai_gated_texts.is_empty() {
             let mut s = String::new();
             for t in ai_gated_texts.iter().take(8) {
-                if !s.is_empty() {
-                    s.push_str("\n\n");
-                }
+                if !s.is_empty() { s.push_str("\n\n"); }
                 s.push_str(t);
             }
             Some(s)
@@ -684,9 +715,8 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         };
 
         (scored, neutralized, total, ai_corpus_opt, now)
-    }; // <- state dropped before the await
+    };
 
-    // -------- 2) STILL BEFORE `await`: cache/limit flags (no lock held across await) --------
     let (ai_disabled, limit_opt) = (
         std::env::var("AI_ENABLED")
             .ok()
@@ -704,7 +734,6 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
     let cache_key_opt = ai_corpus_opt.as_ref().map(|c| hash_bytes(c.as_bytes()));
 
     if let (Some(cache_key), false) = (cache_key_opt, ai_disabled) {
-        // 2a) read-cache
         if let Some(cached) = {
             let st = app_state();
             st.ai_cache
@@ -717,53 +746,41 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
                 ai_cache_hit = true;
             }
         } else {
-            // 2b) check daily limit
             let over_limit = {
                 let today = current_day(current_unix());
                 let st = app_state();
                 if let Some(lim) = limit_opt {
                     let mut g = st.ai_daily.write().expect("ai_daily poisoned");
                     if g.day != today {
-                        g.day = today;
-                        g.used = 0;
+                        g.day = today; g.used = 0;
                     }
                     g.used >= lim
                 } else {
                     false
                 }
             };
-            if over_limit {
-                ai_limited = true;
-            } else {
-                should_call_ai = true;
-            }
+            if over_limit { ai_limited = true; } else { should_call_ai = true; }
         }
     }
 
-    // -------- 3) THE ONLY `await`: AI analysis (only if no cache hit and not over-limit) --------
     if ai_reason.is_none() && should_call_ai {
         if let Some(ai_corpus) = &ai_corpus_opt {
-            let ai_client = { app_state().ai.clone() }; // grab Arc; no guard
+            let ai_client = { app_state().ai.clone() };
             if let Some(r) = ai_analyze_safely(ai_client, ai_corpus.clone()).await {
                 if ai_reason_counts_as_used(&r) {
                     ai_reason = Some(r.clone());
 
-                    // 3a) write to cache
                     if let Some(cache_key) = cache_key_opt {
                         let st = app_state();
                         if let Ok(mut c) = st.ai_cache.write() {
                             c.insert(cache_key, r);
                         }
                     }
-                    // 3b) increment daily usage (if limit is set)
                     if limit_opt.is_some() {
                         let today = current_day(current_unix());
                         let st = app_state();
                         let mut g = st.ai_daily.write().expect("ai_daily poisoned");
-                        if g.day != today {
-                            g.day = today;
-                            g.used = 0;
-                        }
+                        if g.day != today { g.day = today; g.used = 0; }
                         g.used = g.used.saturating_add(1);
                     }
                 }
@@ -771,7 +788,6 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         }
     }
 
-    // -------- 4) AFTER await: take state again and finish the response --------
     let state = app_state();
 
     let mut decision = engine::make_decision(&scored);
@@ -819,13 +835,11 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
                 .weighted(0.1),
             );
         }
-        // metrics: AI used
         counter!("ai_decision_ai_used_total").increment(1);
     }
 
     state.history.push(&decision);
 
-    // ---- Build AI meta + JSON body ----
     let ai_meta = ApiAiInfo {
         used: ai_reason.is_some(),
         reason: ai_reason.clone(),
@@ -833,12 +847,8 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         limited: ai_limited,
     };
 
-    let body = DecideWithAi {
-        inner: decision,
-        ai: ai_meta,
-    };
+    let body = DecideWithAi { inner: decision, ai: ai_meta };
 
-    // concise INFO log
     info!(
         ai_used = %body.ai.used,
         cache_hit = %body.ai.cache_hit,
@@ -847,16 +857,13 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         "decision_done"
     );
 
-    // metrics: record duration
     let dur_ms = t0.elapsed().as_millis() as f64;
     histogram!("ai_decision_duration_ms").record(dur_ms);
 
-    // Save snapshot (best-effort, ignore errors)
     if let Some(store) = &state.last {
         let _ = store.save(&body).await;
     }
 
-    // ---- Headers + response ----
     let mut resp = axum::Json(body).into_response();
     resp.headers_mut().insert(
         "X-AI-Used",
@@ -1010,7 +1017,6 @@ use axum::{
     response::Response,
 };
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 use tokio::time::{Duration, Instant};
 
@@ -1018,22 +1024,18 @@ use tokio::time::{Duration, Instant};
 static AI_CACHE_EXPIRY: Lazy<DashMap<String, Instant>> = Lazy::new(DashMap::new);
 
 fn ai_cache_ttl() -> Duration {
-    // Preferred: millisecond TTL for precise tests
     if let Ok(ms_str) = std::env::var("AI_DECISION_CACHE_TTL_MS") {
         if let Ok(ms) = ms_str.trim().parse::<u64>() {
             return Duration::from_millis(ms);
         }
     }
-    // Back-compat: seconds-based TTL
     let secs = std::env::var("AI_CACHE_TTL_SECS")
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
         .unwrap_or(2);
-    Duration::from_secs(secs) // 0s allowed: always MISS
+    Duration::from_secs(secs)
 }
 
-/// How many ms to subtract from expiry as a “negative bias” (default 10 ms)
-/// to avoid edge-case HITs right after sleep(TTL) on some systems.
 fn ai_cache_bias() -> Duration {
     let ms = std::env::var("AI_CACHE_TTL_BIAS_MS")
         .ok()
@@ -1042,24 +1044,20 @@ fn ai_cache_bias() -> Duration {
     Duration::from_millis(ms)
 }
 
-/// Clear AI cache — called in `router()` for test isolation.
 fn clear_ai_cache() {
     AI_CACHE_EXPIRY.clear();
 }
 
-/// Axum middleware: always add `X-AI-Cache: miss|hit`.
 pub async fn ai_cache_mw(
     req: Request<Body>,
     next: Next,
 ) -> Result<Response, axum::http::StatusCode> {
-    // read body then put it back to the request
     let (parts, body) = req.into_parts();
     let body_bytes = to_bytes(body, 1 << 20)
         .await
         .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
     let body_clone = body_bytes.clone();
 
-    // key = method + path + body
     let key_input = format!(
         "{} {} {}",
         parts.method,
@@ -1068,12 +1066,10 @@ pub async fn ai_cache_mw(
     );
     let key = format!("{:x}", Sha256::digest(key_input.as_bytes()));
 
-    // TTL and hit/miss decision based on fixed expiry
     let ttl = ai_cache_ttl();
     let bias = ai_cache_bias();
     let now = Instant::now();
 
-    // 1) Safely check HIT/MISS
     let is_hit = {
         if let Some(expiry_at) = AI_CACHE_EXPIRY.get(&key) {
             ttl > tokio::time::Duration::ZERO && now < *expiry_at
@@ -1082,27 +1078,21 @@ pub async fn ai_cache_mw(
         }
     };
 
-    // 2) If MISS, write a new expiry
     let status: &str = if is_hit {
-        // metrics: record hit
         counter!("ai_decision_cache_hits_total").increment(1);
         "hit"
     } else {
         let base = now.checked_add(ttl).unwrap_or(now);
         let new_expiry = base.checked_sub(bias).unwrap_or(now);
         AI_CACHE_EXPIRY.insert(key.clone(), new_expiry);
-        // metrics: record miss
         counter!("ai_decision_cache_misses_total").increment(1);
         "miss"
     };
 
-    // continue into the handler
     let req = Request::from_parts(parts, Body::from(body_clone));
     let mut resp = next.run(req).await;
 
-    // add header
-    resp.headers_mut()
-        .insert("X-AI-Cache", status.parse().unwrap());
+    resp.headers_mut().insert("X-AI-Cache", status.parse().unwrap());
 
     Ok(resp)
 }

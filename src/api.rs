@@ -624,6 +624,27 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
     };
 
     if body_is_empty {
+        let body_is_empty = match &body {
+            Value::Null => true,
+            Value::Array(a) if a.is_empty() => true,
+            Value::Object(map) => {
+                let inputs_empty = map
+                    .get("inputs")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.is_empty())
+                    .unwrap_or(false);
+                let items_empty = map
+                    .get("items")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.is_empty())
+                    .unwrap_or(false);
+                map.is_empty() || inputs_empty || items_empty
+            }
+            _ => false,
+        };
+    }
+
+    if body_is_empty {
         let state = app_state();
         if state.history.snapshot_last_n(1).is_empty() {
             if let Some(store) = &state.last {

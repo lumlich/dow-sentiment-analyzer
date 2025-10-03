@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock as StdOnceLock;
-use std::sync::{Arc, OnceLock, RwLock, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use axum::{
     extract::Query,
@@ -12,9 +12,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use once_cell::sync::Lazy;
 use serde_json::Value;
 use tower_http::cors::{Any, CorsLayer};
-use once_cell::sync::Lazy;
 
 use crate::disruption::{self, evaluate_with_weights, DisruptionInput};
 use crate::engine;
@@ -170,8 +170,8 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
 }
 
 /* -----------------------------
-   LIVENESS: last ingested events
-   ----------------------------- */
+LIVENESS: last ingested events
+----------------------------- */
 
 #[derive(Clone, serde::Serialize)]
 pub struct UiEvent {
@@ -309,7 +309,10 @@ fn build_router(state_from_main: RelevanceAppState, last: Option<LastStore>) -> 
             .route("/debug/history", get(debug_history))
             .route("/debug/last-decision", get(debug_last_decision))
             .route("/debug/source-weight", get(debug_source_weight))
-            .route("/admin/reload-source-weights", get(admin_reload_source_weights));
+            .route(
+                "/admin/reload-source-weights",
+                get(admin_reload_source_weights),
+            );
     }
 
     // Apply CORS and the X-AI-Cache middleware
@@ -600,7 +603,27 @@ async fn decide_get() -> impl IntoResponse {
 async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
     let t0 = std::time::Instant::now();
 
-    {
+    // Cold-start fallback spustíme jen když je POST tělo prázdné
+    let body_is_empty = match &body {
+        Value::Null => true,
+        Value::Array(a) if a.is_empty() => true,
+        Value::Object(map) => {
+            let inputs_empty = map
+                .get("inputs")
+                .and_then(|v| v.as_array())
+                .map(|a| a.is_empty())
+                .unwrap_or(false);
+            let items_empty = map
+                .get("items")
+                .and_then(|v| v.as_array())
+                .map(|a| a.is_empty())
+                .unwrap_or(false);
+            map.is_empty() || inputs_empty || items_empty
+        }
+        _ => false,
+    };
+
+    if body_is_empty {
         let state = app_state();
         if state.history.snapshot_last_n(1).is_empty() {
             if let Some(store) = &state.last {
@@ -706,7 +729,9 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         let ai_corpus_opt = if !ai_gated_texts.is_empty() {
             let mut s = String::new();
             for t in ai_gated_texts.iter().take(8) {
-                if !s.is_empty() { s.push_str("\n\n"); }
+                if !s.is_empty() {
+                    s.push_str("\n\n");
+                }
                 s.push_str(t);
             }
             Some(s)
@@ -752,14 +777,19 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
                 if let Some(lim) = limit_opt {
                     let mut g = st.ai_daily.write().expect("ai_daily poisoned");
                     if g.day != today {
-                        g.day = today; g.used = 0;
+                        g.day = today;
+                        g.used = 0;
                     }
                     g.used >= lim
                 } else {
                     false
                 }
             };
-            if over_limit { ai_limited = true; } else { should_call_ai = true; }
+            if over_limit {
+                ai_limited = true;
+            } else {
+                should_call_ai = true;
+            }
         }
     }
 
@@ -780,7 +810,10 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
                         let today = current_day(current_unix());
                         let st = app_state();
                         let mut g = st.ai_daily.write().expect("ai_daily poisoned");
-                        if g.day != today { g.day = today; g.used = 0; }
+                        if g.day != today {
+                            g.day = today;
+                            g.used = 0;
+                        }
                         g.used = g.used.saturating_add(1);
                     }
                 }
@@ -847,7 +880,10 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         limited: ai_limited,
     };
 
-    let body = DecideWithAi { inner: decision, ai: ai_meta };
+    let body = DecideWithAi {
+        inner: decision,
+        ai: ai_meta,
+    };
 
     info!(
         ai_used = %body.ai.used,
@@ -1092,7 +1128,8 @@ pub async fn ai_cache_mw(
     let req = Request::from_parts(parts, Body::from(body_clone));
     let mut resp = next.run(req).await;
 
-    resp.headers_mut().insert("X-AI-Cache", status.parse().unwrap());
+    resp.headers_mut()
+        .insert("X-AI-Cache", status.parse().unwrap());
 
     Ok(resp)
 }

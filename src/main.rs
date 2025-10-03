@@ -108,6 +108,22 @@ async fn favicon_handler() -> Response {
     }
 }
 
+async fn apple_touch_handler() -> Response {
+    if tokio::fs::metadata("apple-touch-icon.png").await.is_ok() {
+        read_file_response(
+            PathBuf::from("apple-touch-icon.png"),
+            "public, max-age=86400",
+        )
+        .await
+    } else {
+        read_file_response(
+            PathBuf::from("assets/apple-touch-icon.png"),
+            "public, max-age=86400",
+        )
+        .await
+    }
+}
+
 fn index_response() -> impl IntoResponse {
     let headers = [
         (
@@ -287,6 +303,7 @@ async fn axum(
         .route("/_health", get(|| async { "ok" }))
         // Static
         .route("/favicon.ico", get(favicon_handler))
+        .route("/apple-touch-icon.png", get(apple_touch_handler))
         .route("/assets/{*path}", get(assets_handler))
         .route("/config/{*path}", get(config_handler)) // **NEW** – statické konfigy
         // UI + SPA fallback

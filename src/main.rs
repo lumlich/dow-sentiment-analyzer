@@ -12,9 +12,9 @@ use shuttle_axum::axum::{
 use shuttle_axum::ShuttleAxum;
 use shuttle_runtime::SecretStore;
 
-// --- redirect middleware imports ---
+// --- redirect middleware imports (axum 0.8) ---
 use shuttle_axum::axum::extract::Request;
-use shuttle_axum::axum::middleware::{self, Next}; // správný alias v axum 0.8
+use shuttle_axum::axum::middleware::{self, Next};
 
 use std::{path::PathBuf, time::Duration};
 use tower::ServiceBuilder;
@@ -46,12 +46,13 @@ const HSTS_VALUE: &str = "max-age=31536000; includeSubDomains";
 
 // ----- Secrets -----
 fn load_secrets_into_env(secrets: &SecretStore) {
+    // Hydrate only true secrets. Keep non-secret config in "Variables".
     const KEYS: &[&str] = &[
         "OPENAI_API_KEY",
         "DISCORD_WEBHOOK_URL",
         "SLACK_WEBHOOK",
         "SMTP_PASSWORD",
-        // případně další skutečně tajné klíče
+        // add other real secrets if you have them
     ];
     for k in KEYS {
         if let Some(v) = secrets.get(k) {
@@ -72,14 +73,9 @@ async fn read_file_response(full: PathBuf, cache_control: &'static str) -> Respo
             let ct = HeaderValue::from_str(guessed.as_ref())
                 .unwrap_or(HeaderValue::from_static("application/octet-stream"));
 
-            let mut resp = (
-                [(
-                    header::CACHE_CONTROL,
-                    HeaderValue::from_static(cache_control),
-                )],
-                bytes,
-            )
-                .into_response();
+            let mut resp =
+                ([(header::CACHE_CONTROL, HeaderValue::from_static(cache_control))], bytes)
+                    .into_response();
             resp.headers_mut().insert(header::CONTENT_TYPE, ct);
             resp
         }
@@ -94,7 +90,7 @@ async fn assets_handler(Path(path): Path<String>) -> Response {
 }
 
 async fn config_handler(Path(path): Path<String>) -> Response {
-    // Statické konfigy – no-store, aby se necacheoval JSON/TOML
+    // Static configs – no-store to avoid caching JSON/TOML
     let safe: Vec<&str> = path.split('/').filter(|s| sanitize_segment(s)).collect();
     let full = PathBuf::from("config").join(safe.join("/"));
     read_file_response(full, "no-store").await
@@ -110,11 +106,7 @@ async fn favicon_handler() -> Response {
 
 async fn apple_touch_handler() -> Response {
     if tokio::fs::metadata("apple-touch-icon.png").await.is_ok() {
-        read_file_response(
-            PathBuf::from("apple-touch-icon.png"),
-            "public, max-age=86400",
-        )
-        .await
+        read_file_response(PathBuf::from("apple-touch-icon.png"), "public, max-age=86400").await
     } else {
         read_file_response(
             PathBuf::from("assets/apple-touch-icon.png"),
@@ -144,10 +136,7 @@ use dow_sentiment_analyzer::{
     api,
     ingest::{
         self,
-        providers::{
-            fed_rss::FedRssProvider, generic_rss::GenericRssProvider,
-            reuters_rss::ReutersRssProvider,
-        },
+        providers::{fed_rss::FedRssProvider, generic_rss::GenericRssProvider, reuters_rss::ReutersRssProvider},
         types::SourceProvider,
     },
     relevance::AppState,
@@ -189,17 +178,20 @@ async fn run_ingest_scheduler(_app_state: AppState) {
         let whitelist = ingest::config::load_whitelist_default().unwrap_or_default();
 
         let mut providers: Vec<Box<dyn SourceProvider>> = vec![Box::new(FedRssProvider::new())];
-        // Volitelně Reuters (default ON); vypneš přes INGEST_ENABLE_REUTERS=false
+
+        // Optional: Reuters (default ON); disable with INGEST_ENABLE_REUTERS=false
         if env_truthy("INGEST_ENABLE_REUTERS", true) {
             providers.push(Box::new(ReutersRssProvider::new()));
         }
+        // Generic RSS reading config/feeds.json (default ON); disable with INGEST_ENABLE_GENERIC=false
         if env_truthy("INGEST_ENABLE_GENERIC", true) {
             providers.push(Box::new(GenericRssProvider::new()));
         }
+
         let (kept, filtered, dedup) =
             ingest::run_once(&providers, &whitelist, dedup_window_secs).await;
 
-        // **NEW**: zapiš poslední evidence pro /api/debug/ingest
+        // Record last evidence for /api/debug/ingest
         dow_sentiment_analyzer::api::debug_ingest_record(&kept);
 
         info!(
@@ -219,11 +211,7 @@ async fn redirect_apex_to_www(req: Request, next: Next) -> Response {
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     if host.eq_ignore_ascii_case("dowsentiment.app") {
-        let pq = req
-            .uri()
-            .path_and_query()
-            .map(|x| x.as_str())
-            .unwrap_or("/");
+        let pq = req.uri().path_and_query().map(|x| x.as_str()).unwrap_or("/");
         let loc = format!("https://www.dowsentiment.app{}", pq);
         return (
             StatusCode::MOVED_PERMANENTLY,
@@ -310,7 +298,7 @@ async fn axum(
         .route("/favicon.ico", get(favicon_handler))
         .route("/apple-touch-icon.png", get(apple_touch_handler))
         .route("/assets/{*path}", get(assets_handler))
-        .route("/config/{*path}", get(config_handler)) // **NEW** – statické konfigy
+        .route("/config/{*path}", get(config_handler)) // static configs
         // UI + SPA fallback
         .route("/", get(index_html))
         .route("/{*path}", get(index_html))
@@ -321,13 +309,12 @@ async fn axum(
         // 2) outer: security + utility headers (applies also to 301)
         .layer(sec);
 
-    // Optional metrics at /metrics
+    // Optional metrics at /metrics (root-level)
     let metrics_enabled = std::env::var("METRICS_ENABLED")
         .ok()
         .map(|v| v == "1")
         .unwrap_or(false);
     if metrics_enabled {
-        // Use the tiny helper router from crate::metrics
         app = app.merge(dow_sentiment_analyzer::metrics::router());
     }
 

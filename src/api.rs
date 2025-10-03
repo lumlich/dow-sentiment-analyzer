@@ -170,8 +170,8 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
 }
 
 /* -----------------------------
-LIVENESS: last ingested events
------------------------------ */
+   LIVENESS: last ingested events
+   ----------------------------- */
 
 #[derive(Clone, serde::Serialize)]
 pub struct UiEvent {
@@ -185,7 +185,7 @@ const EVIDENCE_CAP: usize = 256;
 static EVIDENCE: Lazy<Mutex<VecDeque<UiEvent>>> =
     Lazy::new(|| Mutex::new(VecDeque::with_capacity(EVIDENCE_CAP)));
 
-/// Volá ingest scheduler po každém ticku (po dedup/filtru) s „kept“ položkami.
+/// Called by ingest scheduler after each tick (post dedup/filter) with "kept" items.
 pub fn debug_ingest_record(events: &[SourceEvent]) {
     if events.is_empty() {
         return;
@@ -265,7 +265,7 @@ fn build_router(state_from_main: RelevanceAppState, last: Option<LastStore>) -> 
             .allow_origin(origins)
     };
 
-    // Gate /api/metrics behind METRICS_ENABLED (root /metrics řeší main.rs)
+    // Gate /api/metrics behind METRICS_ENABLED (root /metrics handled in main.rs)
     let metrics_enabled = std::env::var("METRICS_ENABLED")
         .ok()
         .map(|v| v == "1")
@@ -282,10 +282,7 @@ fn build_router(state_from_main: RelevanceAppState, last: Option<LastStore>) -> 
                 let body = PROM.get().map(|h| h.render()).unwrap_or_default();
                 axum::response::Response::builder()
                     .status(200)
-                    .header(
-                        axum::http::header::CONTENT_TYPE,
-                        "text/plain; version=0.0.4",
-                    )
+                    .header(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")
                     .body(axum::body::Body::from(body))
                     .unwrap()
             }),
@@ -299,7 +296,7 @@ fn build_router(state_from_main: RelevanceAppState, last: Option<LastStore>) -> 
         .route("/batch", post(analyze_batch))
         // Decision endpoint: GET = stable shape for change-detector, POST = full decision
         .route("/decide", get(decide_get).post(decide))
-        // **NEW** liveness: poslední evidence z ingestu (bez brány)
+        // Liveness: latest evidence from ingest (no gate)
         .route("/debug/ingest", get(debug_ingest_list));
 
     // Debug / introspection when enabled
@@ -309,10 +306,7 @@ fn build_router(state_from_main: RelevanceAppState, last: Option<LastStore>) -> 
             .route("/debug/history", get(debug_history))
             .route("/debug/last-decision", get(debug_last_decision))
             .route("/debug/source-weight", get(debug_source_weight))
-            .route(
-                "/admin/reload-source-weights",
-                get(admin_reload_source_weights),
-            );
+            .route("/admin/reload-source-weights", get(admin_reload_source_weights));
     }
 
     // Apply CORS and the X-AI-Cache middleware
@@ -331,8 +325,7 @@ pub fn router_with_last(state_from_main: RelevanceAppState, last: LastStore) -> 
     build_router(state_from_main, Some(last))
 }
 
-/// Test shim: tests call `api::router().await` without argument.
-/// We return an async fn so `.await` remains valid.
+/// Test shim
 #[cfg(test)]
 pub async fn router() -> Router<()> {
     build_router(RelevanceAppState::from_env(), None)
@@ -603,7 +596,7 @@ async fn decide_get() -> impl IntoResponse {
 async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
     let t0 = std::time::Instant::now();
 
-    // Cold-start fallback spustíme jen když je POST tělo prázdné
+    // Cold-start fallback only when POST body is empty
     let body_is_empty = match &body {
         Value::Null => true,
         Value::Array(a) if a.is_empty() => true,
@@ -622,27 +615,6 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         }
         _ => false,
     };
-
-    if body_is_empty {
-        let body_is_empty = match &body {
-            Value::Null => true,
-            Value::Array(a) if a.is_empty() => true,
-            Value::Object(map) => {
-                let inputs_empty = map
-                    .get("inputs")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.is_empty())
-                    .unwrap_or(false);
-                let items_empty = map
-                    .get("items")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.is_empty())
-                    .unwrap_or(false);
-                map.is_empty() || inputs_empty || items_empty
-            }
-            _ => false,
-        };
-    }
 
     if body_is_empty {
         let state = app_state();
@@ -705,11 +677,7 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
             }
 
             if dev_logging_enabled() {
-                let event = if rel.score > 0.0 {
-                    "api_pass"
-                } else {
-                    "api_neutralized"
-                };
+                let event = if rel.score > 0.0 { "api_pass" } else { "api_neutralized" };
                 info!(
                     target: "relevance",
                     event,
@@ -740,19 +708,14 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
                 evaluate_with_weights(&di, &guard)
             };
 
-            let bi = BatchItem {
-                source: it.source,
-                text: it.text,
-            };
+            let bi = BatchItem { source: it.source, text: it.text };
             scored.push((bi, gated_score, res));
         }
 
         let ai_corpus_opt = if !ai_gated_texts.is_empty() {
             let mut s = String::new();
             for t in ai_gated_texts.iter().take(8) {
-                if !s.is_empty() {
-                    s.push_str("\n\n");
-                }
+                if !s.is_empty() { s.push_str("\n\n"); }
                 s.push_str(t);
             }
             Some(s)
@@ -764,13 +727,8 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
     };
 
     let (ai_disabled, limit_opt) = (
-        std::env::var("AI_ENABLED")
-            .ok()
-            .map(|v| v == "0")
-            .unwrap_or(false),
-        std::env::var("AI_DAILY_LIMIT")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok()),
+        std::env::var("AI_ENABLED").ok().map(|v| v == "0").unwrap_or(false),
+        std::env::var("AI_DAILY_LIMIT").ok().and_then(|s| s.parse::<usize>().ok()),
     );
 
     let mut ai_reason: Option<String> = None;
@@ -782,10 +740,7 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
     if let (Some(cache_key), false) = (cache_key_opt, ai_disabled) {
         if let Some(cached) = {
             let st = app_state();
-            st.ai_cache
-                .read()
-                .ok()
-                .and_then(|g| g.get(&cache_key).cloned())
+            st.ai_cache.read().ok().and_then(|g| g.get(&cache_key).cloned())
         } {
             if !cached.is_empty() {
                 ai_reason = Some(cached);
@@ -797,20 +752,11 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
                 let st = app_state();
                 if let Some(lim) = limit_opt {
                     let mut g = st.ai_daily.write().expect("ai_daily poisoned");
-                    if g.day != today {
-                        g.day = today;
-                        g.used = 0;
-                    }
+                    if g.day != today { g.day = today; g.used = 0; }
                     g.used >= lim
-                } else {
-                    false
-                }
+                } else { false }
             };
-            if over_limit {
-                ai_limited = true;
-            } else {
-                should_call_ai = true;
-            }
+            if over_limit { ai_limited = true; } else { should_call_ai = true; }
         }
     }
 
@@ -831,10 +777,7 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
                         let today = current_day(current_unix());
                         let st = app_state();
                         let mut g = st.ai_daily.write().expect("ai_daily poisoned");
-                        if g.day != today {
-                            g.day = today;
-                            g.used = 0;
-                        }
+                        if g.day != today { g.day = today; g.used = 0; }
                         g.used = g.used.saturating_add(1);
                     }
                 }
@@ -901,10 +844,7 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
         limited: ai_limited,
     };
 
-    let body = DecideWithAi {
-        inner: decision,
-        ai: ai_meta,
-    };
+    let body = DecideWithAi { inner: decision, ai: ai_meta };
 
     info!(
         ai_used = %body.ai.used,
@@ -922,10 +862,8 @@ async fn decide(Json(body): Json<Value>) -> impl IntoResponse {
     }
 
     let mut resp = axum::Json(body).into_response();
-    resp.headers_mut().insert(
-        "X-AI-Used",
-        HeaderValue::from_static(if ai_reason.is_some() { "1" } else { "0" }),
-    );
+    resp.headers_mut()
+        .insert("X-AI-Used", HeaderValue::from_static(if ai_reason.is_some() { "1" } else { "0" }));
     if let Some(r) = ai_reason {
         if let Ok(hv) = HeaderValue::from_str(&r) {
             resp.headers_mut().insert("X-AI-Reason", hv);
@@ -1149,8 +1087,7 @@ pub async fn ai_cache_mw(
     let req = Request::from_parts(parts, Body::from(body_clone));
     let mut resp = next.run(req).await;
 
-    resp.headers_mut()
-        .insert("X-AI-Cache", status.parse().unwrap());
+    resp.headers_mut().insert("X-AI-Cache", status.parse().unwrap());
 
     Ok(resp)
 }

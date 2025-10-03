@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use tracing::{info, warn};
 
-use crate::ingest::types::{SourceEvent, SourceProvider};
+use crate::ingest::types::{Result as IngestResult, SourceEvent, SourceProvider};
 
 #[derive(Debug, serde::Deserialize)]
 struct FeedDef {
@@ -66,11 +66,11 @@ impl GenericRssProvider {
     fn source_label(feed: &FeedDef, url_opt: &Option<String>) -> String {
         let guess = url_opt
             .as_deref()
-            .and_then(|u| u.split('/').nth(2)) // velmi jednoduché získání hostu
+            .and_then(|u| u.split('/').nth(2)) // naive host extraction
             .unwrap_or_default()
             .to_ascii_lowercase();
 
-        // Heuristické „hezké“ názvy
+        // Heuristic "nice" labels
         if guess.contains("bls.gov") {
             return "BLS".into();
         }
@@ -81,7 +81,7 @@ impl GenericRssProvider {
             return "Treasury".into();
         }
         if guess.contains("whitehouse.gov") {
-            return "WhiteHouse".into();
+            return "White House".into();
         }
         if guess.contains("ecb.europa.eu") {
             return "ECB".into();
@@ -96,7 +96,7 @@ impl GenericRssProvider {
             return "Trump".into();
         }
 
-        // fallback: id -> jinak name
+        // fallback: id -> otherwise name
         if !feed.id.is_empty() {
             feed.id.clone()
         } else {
@@ -111,7 +111,7 @@ impl SourceProvider for GenericRssProvider {
         "generic_rss"
     }
 
-    async fn fetch(&self) -> anyhow::Result<Vec<SourceEvent>> {
+    async fn fetch_latest(&self) -> IngestResult<Vec<SourceEvent>> {
         let feeds = self.load_cfg();
         if feeds.is_empty() {
             info!("generic_rss: no enabled feeds");
@@ -157,6 +157,7 @@ impl SourceProvider for GenericRssProvider {
                                         published_at: ts,
                                         text,
                                         url,
+                                        priority_hint: f.weight.unwrap_or(1.0),
                                     });
                                 }
                             }

@@ -1,1 +1,6 @@
 ["fed","powell","fomc","rate","rates","cut","cuts","hike","hikes","inflation","cpi","pce","jobs","labor","unemployment","dow","futures"]
+additional = [
+  "white house","president","biden","trump","policy","tariff","sanction","trade",
+  "ecb","lagarde","eurozone","gdp","pmi","beige book","minutes","dot plot","yields",
+  "treasury","auction","coupon","marketwatch","cnbc","reuters","breaking"
+]

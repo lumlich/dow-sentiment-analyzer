@@ -144,7 +144,10 @@ use dow_sentiment_analyzer::{
     api,
     ingest::{
         self,
-        providers::{fed_rss::FedRssProvider, reuters_rss::ReutersRssProvider},
+        providers::{
+            fed_rss::FedRssProvider, generic_rss::GenericRssProvider,
+            reuters_rss::ReutersRssProvider,
+        },
         types::SourceProvider,
     },
     relevance::AppState,
@@ -190,7 +193,9 @@ async fn run_ingest_scheduler(_app_state: AppState) {
         if env_truthy("INGEST_ENABLE_REUTERS", true) {
             providers.push(Box::new(ReutersRssProvider::new()));
         }
-
+        if env_truthy("INGEST_ENABLE_GENERIC", true) {
+            providers.push(Box::new(GenericRssProvider::new()));
+        }
         let (kept, filtered, dedup) =
             ingest::run_once(&providers, &whitelist, dedup_window_secs).await;
 

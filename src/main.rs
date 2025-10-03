@@ -161,7 +161,7 @@ fn env_truthy(key: &str, default: bool) -> bool {
 }
 
 async fn run_ingest_scheduler(_app_state: AppState) {
-    let enabled = std::env::var("INGEST_ENABLED").unwrap_or_else(|_| "false".into()) == "true";
+    let enabled = env_truthy("INGEST_ENABLED", false);
     if !enabled {
         info!("ingest scheduler disabled (INGEST_ENABLED=false)");
         return;

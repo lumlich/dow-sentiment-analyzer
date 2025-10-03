@@ -6,6 +6,7 @@ use std::sync::OnceLock as StdOnceLock;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use axum::{
+    body::Bytes,
     extract::Query,
     http::{header, HeaderValue, Method},
     response::IntoResponse,
@@ -153,11 +154,27 @@ fn debug_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// truthy: "1" | "true" | "yes" | "on" (case-insensitive)
+fn env_truthy(key: &str) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+/// same as env_truthy, but with default when var missing
+fn env_truthy_or(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(default)
+}
+
 fn debug_routes_enabled() -> bool {
-    debug_enabled()
-        || std::env::var("DEBUG_ROUTES")
-            .map(|v| v == "1")
-            .unwrap_or(false)
+    // zůstává SHUTTLE_ENV=local, navíc robustní DEBUG_ROUTES
+    debug_enabled() || env_truthy("DEBUG_ROUTES")
 }
 
 // Return current UNIX time as string (for UI "time" field)
@@ -231,10 +248,10 @@ async fn debug_ingest_force() -> Json<ForceIngestOut> {
     let mut providers: Vec<Box<dyn crate::ingest::types::SourceProvider>> =
         vec![Box::new(FedRssProvider::new())];
 
-    if env_truthy("INGEST_ENABLE_REUTERS", true) {
+    if env_truthy_or("INGEST_ENABLE_REUTERS", true) {
         providers.push(Box::new(ReutersRssProvider::new()));
     }
-    if env_truthy("INGEST_ENABLE_GENERIC", true) {
+    if env_truthy_or("INGEST_ENABLE_GENERIC", true) {
         providers.push(Box::new(GenericRssProvider::new()));
     }
 
@@ -259,13 +276,6 @@ async fn debug_ingest_force() -> Json<ForceIngestOut> {
         dedup,
         sources,
     })
-}
-
-fn env_truthy(key: &str, default: bool) -> bool {
-    match std::env::var(key) {
-        Ok(v) => matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
-        Err(_) => default,
-    }
 }
 
 /// Private builder that actually builds the Router.
@@ -349,6 +359,9 @@ fn build_router(state_from_main: RelevanceAppState, last: Option<LastStore>) -> 
         );
     }
 
+    // ---- always-on debug status (pro ověření proměnných v runtime) ----
+    r = r.route("/debug/status", get(debug_status));
+
     r = r
         // UI primary endpoint
         .route("/analyze", post(analyze))
@@ -375,6 +388,33 @@ fn build_router(state_from_main: RelevanceAppState, last: Option<LastStore>) -> 
 
     // Apply CORS and the X-AI-Cache middleware
     r.layer(cors).layer(axum::middleware::from_fn(ai_cache_mw))
+}
+
+#[derive(serde::Serialize)]
+struct DebugStatus {
+    debug_routes: bool,
+    shuttle_env: Option<String>,
+    debug_routes_raw: Option<String>,
+    ingest_enabled: bool,
+    ingest_interval_secs: Option<u64>,
+    ingest_enable_reuters: Option<String>,
+    ingest_enable_generic: Option<String>,
+    feeds_config_path: Option<String>,
+}
+
+async fn debug_status() -> Json<DebugStatus> {
+    Json(DebugStatus {
+        debug_routes: debug_routes_enabled(),
+        shuttle_env: std::env::var("SHUTTLE_ENV").ok(),
+        debug_routes_raw: std::env::var("DEBUG_ROUTES").ok(),
+        ingest_enabled: env_truthy("INGEST_ENABLED"),
+        ingest_interval_secs: std::env::var("INGEST_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok()),
+        ingest_enable_reuters: std::env::var("INGEST_ENABLE_REUTERS").ok(),
+        ingest_enable_generic: std::env::var("INGEST_ENABLE_GENERIC").ok(),
+        feeds_config_path: std::env::var("FEEDS_CONFIG_PATH").ok(),
+    })
 }
 
 /// Production router: keep the original signature for backward compatibility.
@@ -657,13 +697,25 @@ async fn decide_get() -> impl IntoResponse {
 }
 
 #[axum::debug_handler]
-async fn decide(maybe_json: Option<Json<Value>>) -> impl IntoResponse {
+async fn decide(raw: Bytes) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
     let t0 = std::time::Instant::now();
 
-    // Bezpečně získej tělo. Pokud je prázdné/nevalidní, bereme to jako Value::Null
-    let body: Value = match maybe_json {
-        Some(Json(v)) => v,
-        None => Value::Null,
+    // Robustní čtení těla: 0 bytů => prázdné JSON (Value::Null) místo 400
+    let body: Value = if raw.is_empty() {
+        Value::Null
+    } else {
+        match serde_json::from_slice::<Value>(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("Failed to parse the request body as JSON: {e}"),
+                )
+                    .into_response()
+            }
+        }
     };
 
     // Cold-start fallback only when POST body is empty

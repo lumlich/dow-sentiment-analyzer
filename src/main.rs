@@ -73,9 +73,14 @@ async fn read_file_response(full: PathBuf, cache_control: &'static str) -> Respo
             let ct = HeaderValue::from_str(guessed.as_ref())
                 .unwrap_or(HeaderValue::from_static("application/octet-stream"));
 
-            let mut resp =
-                ([(header::CACHE_CONTROL, HeaderValue::from_static(cache_control))], bytes)
-                    .into_response();
+            let mut resp = (
+                [(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static(cache_control),
+                )],
+                bytes,
+            )
+                .into_response();
             resp.headers_mut().insert(header::CONTENT_TYPE, ct);
             resp
         }
@@ -106,7 +111,11 @@ async fn favicon_handler() -> Response {
 
 async fn apple_touch_handler() -> Response {
     if tokio::fs::metadata("apple-touch-icon.png").await.is_ok() {
-        read_file_response(PathBuf::from("apple-touch-icon.png"), "public, max-age=86400").await
+        read_file_response(
+            PathBuf::from("apple-touch-icon.png"),
+            "public, max-age=86400",
+        )
+        .await
     } else {
         read_file_response(
             PathBuf::from("assets/apple-touch-icon.png"),
@@ -136,7 +145,10 @@ use dow_sentiment_analyzer::{
     api,
     ingest::{
         self,
-        providers::{fed_rss::FedRssProvider, generic_rss::GenericRssProvider, reuters_rss::ReutersRssProvider},
+        providers::{
+            fed_rss::FedRssProvider, generic_rss::GenericRssProvider,
+            reuters_rss::ReutersRssProvider,
+        },
         types::SourceProvider,
     },
     relevance::AppState,
@@ -211,7 +223,11 @@ async fn redirect_apex_to_www(req: Request, next: Next) -> Response {
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     if host.eq_ignore_ascii_case("dowsentiment.app") {
-        let pq = req.uri().path_and_query().map(|x| x.as_str()).unwrap_or("/");
+        let pq = req
+            .uri()
+            .path_and_query()
+            .map(|x| x.as_str())
+            .unwrap_or("/");
         let loc = format!("https://www.dowsentiment.app{}", pq);
         return (
             StatusCode::MOVED_PERMANENTLY,
@@ -299,11 +315,11 @@ async fn axum(
         .route("/apple-touch-icon.png", get(apple_touch_handler))
         .route("/assets/{*path}", get(assets_handler))
         .route("/config/{*path}", get(config_handler)) // static configs
-        // UI + SPA fallback
+        // API (před SPA fallback!)
+        .nest("/api", api_router)
+        // UI + SPA fallback (až nakonec)
         .route("/", get(index_html))
         .route("/{*path}", get(index_html))
-        // API
-        .nest("/api", api_router)
         // 1) inner: apex -> www redirect
         .layer(middleware::from_fn(redirect_apex_to_www))
         // 2) outer: security + utility headers (applies also to 301)

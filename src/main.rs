@@ -47,30 +47,11 @@ const HSTS_VALUE: &str = "max-age=31536000; includeSubDomains";
 // ----- Secrets -----
 fn load_secrets_into_env(secrets: &SecretStore) {
     const KEYS: &[&str] = &[
-        // AI
-        "AI_PROVIDER",
         "OPENAI_API_KEY",
-        "OPENAI_MODEL",
-        "OPENAI_API_BASE",
-        "AI_ONLY_TOP_SOURCES",
-        "AI_SCORE_BAND",
-        "AI_DECISION_CACHE_TTL_MS",
-        "AI_SOURCES",
-        "AI_TEST_MODE",
-        // Ingest
-        "INGEST_ENABLED",
-        "INGEST_INTERVAL_SECS",
-        "INGEST_DEDUP_WINDOW_SECS",
-        "INGEST_WHITELIST_PATH",
-        // CORS
-        "ALLOWED_ORIGINS",
-        // Observability
-        "METRICS_ENABLED",
-        // Security / limits
-        "HSTS_ENABLED",
-        "API_BODY_LIMIT_BYTES",
-        // Optional providers
-        "INGEST_ENABLE_REUTERS",
+        "DISCORD_WEBHOOK_URL",
+        "SLACK_WEBHOOK",
+        "SMTP_PASSWORD",
+        // případně další skutečně tajné klíče
     ];
     for k in KEYS {
         if let Some(v) = secrets.get(k) {
@@ -92,7 +73,10 @@ async fn read_file_response(full: PathBuf, cache_control: &'static str) -> Respo
                 .unwrap_or(HeaderValue::from_static("application/octet-stream"));
 
             let mut resp = (
-                [(header::CACHE_CONTROL, HeaderValue::from_static(cache_control))],
+                [(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static(cache_control),
+                )],
                 bytes,
             )
                 .into_response();
@@ -185,9 +169,7 @@ async fn run_ingest_scheduler(_app_state: AppState) {
 
         let whitelist = ingest::config::load_whitelist_default().unwrap_or_default();
 
-        let mut providers: Vec<Box<dyn SourceProvider>> = vec![
-            Box::new(FedRssProvider::new()),
-        ];
+        let mut providers: Vec<Box<dyn SourceProvider>> = vec![Box::new(FedRssProvider::new())];
         // Volitelně Reuters (default ON); vypneš přes INGEST_ENABLE_REUTERS=false
         if env_truthy("INGEST_ENABLE_REUTERS", true) {
             providers.push(Box::new(ReutersRssProvider::new()));

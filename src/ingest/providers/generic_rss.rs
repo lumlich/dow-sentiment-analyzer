@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use tracing::{info, warn};
+use anyhow::Result;
 
-use crate::ingest::types::{Result as IngestResult, SourceEvent, SourceProvider};
+use crate::ingest::types::{SourceEvent, SourceProvider};
 
 #[derive(Debug, serde::Deserialize)]
 struct FeedDef {
@@ -81,7 +82,7 @@ impl GenericRssProvider {
             return "Treasury".into();
         }
         if guess.contains("whitehouse.gov") {
-            return "White House".into();
+            return "WhiteHouse".into();
         }
         if guess.contains("ecb.europa.eu") {
             return "ECB".into();
@@ -111,7 +112,7 @@ impl SourceProvider for GenericRssProvider {
         "generic_rss"
     }
 
-    async fn fetch_latest(&self) -> IngestResult<Vec<SourceEvent>> {
+    async fn fetch_latest(&self) -> Result<Vec<SourceEvent>> {
         let feeds = self.load_cfg();
         if feeds.is_empty() {
             info!("generic_rss: no enabled feeds");
@@ -157,7 +158,8 @@ impl SourceProvider for GenericRssProvider {
                                         published_at: ts,
                                         text,
                                         url,
-                                        priority_hint: f.weight.unwrap_or(1.0),
+                                        // keep it optional; use feed weight if provided
+                                        priority_hint: f.weight,
                                     });
                                 }
                             }

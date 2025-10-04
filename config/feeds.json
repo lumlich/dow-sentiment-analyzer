@@ -1,7 +1,7 @@
 [
   {
     "id": "fed-press",
-    "name": "Federal Reserve \u2014 Press Releases (All)",
+    "name": "Federal Reserve — Press Releases (All)",
     "url": "https://www.federalreserve.gov/feeds/press_all.xml",
     "category": "rates",
     "weight": 1.0,
@@ -9,7 +9,7 @@
   },
   {
     "id": "fed-monetary-policy",
-    "name": "Federal Reserve \u2014 Monetary Policy Press Releases",
+    "name": "Federal Reserve — Monetary Policy Press Releases",
     "url": "https://www.federalreserve.gov/feeds/press_monetary.xml",
     "category": "rates",
     "weight": 0.98,
@@ -17,7 +17,7 @@
   },
   {
     "id": "bls-cpi",
-    "name": "BLS \u2014 Consumer Price Index (CPI) News Releases",
+    "name": "BLS — Consumer Price Index (CPI) News Releases",
     "url": "https://www.bls.gov/feed/cpi.rss",
     "category": "inflation",
     "weight": 1.0,
@@ -25,7 +25,7 @@
   },
   {
     "id": "bls-ppi",
-    "name": "BLS \u2014 Producer Price Index (PPI) News Releases",
+    "name": "BLS — Producer Price Index (PPI) News Releases",
     "url": "https://www.bls.gov/feed/ppi.rss",
     "category": "inflation",
     "weight": 0.96,
@@ -33,7 +33,7 @@
   },
   {
     "id": "bls-empsit",
-    "name": "BLS \u2014 Employment Situation (Nonfarm Payrolls)",
+    "name": "BLS — Employment Situation (Nonfarm Payrolls)",
     "url": "https://www.bls.gov/feed/empsit.rss",
     "category": "labor",
     "weight": 1.0,
@@ -41,7 +41,7 @@
   },
   {
     "id": "bea-news",
-    "name": "BEA \u2014 News Releases (GDP, PCE, Trade)",
+    "name": "BEA — News Releases (GDP, PCE, Trade)",
     "url": "https://apps.bea.gov/rss/rss.xml",
     "category": "growth",
     "weight": 0.92,
@@ -49,31 +49,31 @@
   },
   {
     "id": "treasury-auctions",
-    "name": "TreasuryDirect \u2014 Auction Announcements & Results",
+    "name": "TreasuryDirect — Auction Announcements & Results",
     "url": "https://treasurydirect.gov/rss/auctionresults.xml",
     "category": "rates",
     "weight": 0.9,
-    "enabled": true
+    "enabled": false
   },
   {
     "id": "treasury-yield-xml",
-    "name": "U.S. Treasury \u2014 Daily Par Yield Curve (XML)",
+    "name": "U.S. Treasury — Daily Par Yield Curve (XML)",
     "url": "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve",
     "category": "rates",
     "weight": 0.85,
-    "enabled": true
+    "enabled": false
   },
   {
     "id": "whitehouse-briefing",
-    "name": "White House \u2014 Briefing Room (Official statements)",
+    "name": "White House — Briefing Room (Official statements)",
     "url": "https://www.whitehouse.gov/briefing-room/feed/",
     "category": "policy",
     "weight": 0.6,
-    "enabled": true
+    "enabled": false
   },
   {
     "id": "ecb-press",
-    "name": "ECB \u2014 Press Releases",
+    "name": "ECB — Press Releases",
     "url": "https://www.ecb.europa.eu/rss/press.html",
     "category": "rates",
     "weight": 0.6,
@@ -81,7 +81,7 @@
   },
   {
     "id": "ecb-statpress",
-    "name": "ECB \u2014 Statistics Press Releases",
+    "name": "ECB — Statistics Press Releases",
     "url": "https://www.ecb.europa.eu/rss/statpress.html",
     "category": "rates",
     "weight": 0.58,
@@ -89,7 +89,7 @@
   },
   {
     "id": "marketwatch-top",
-    "name": "MarketWatch \u2014 Top Stories",
+    "name": "MarketWatch — Top Stories",
     "url": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
     "category": "economy",
     "weight": 0.62,
@@ -97,7 +97,7 @@
   },
   {
     "id": "cnbc-economy",
-    "name": "CNBC \u2014 Economy",
+    "name": "CNBC — Economy",
     "url": "https://www.cnbc.com/id/20910258/device/rss/rss.html",
     "category": "economy",
     "weight": 0.6,
@@ -105,7 +105,7 @@
   },
   {
     "id": "fred-blog",
-    "name": "St. Louis Fed \u2014 FRED Blog",
+    "name": "St. Louis Fed — FRED Blog",
     "url": "https://fredblog.stlouisfed.org/feed/",
     "category": "research",
     "weight": 0.35,

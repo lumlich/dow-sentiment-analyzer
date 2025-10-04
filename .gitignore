@@ -112,3 +112,23 @@ config/ai.json
 # Legacy UI folder (replaced by ui.off)
 /ui/
 
+.shuttle*
+Secrets*.toml
+# local env / secrets
+.env
+.env.*
+.shuttle/
+Shuttle.secrets*
+# snapshots & dumps
+snapshots/
+*.zip
+# build artifacts
+/target/
+**/*.log
+# local diagnostics
+ingest_*.csv
+ingest_diag.csv
+ingest_last.csv
+req.json
+ing.json
+empty.json

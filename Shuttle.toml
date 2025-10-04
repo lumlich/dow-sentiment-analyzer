@@ -1,4 +1,4 @@
 name = "dow-sentiment-analyzer"
 
 [build]
-assets = ["assets/**", "config/**"]
+assets = ["assets", "config"]

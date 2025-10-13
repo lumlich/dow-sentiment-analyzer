@@ -43,7 +43,7 @@ shuttle-shared-db = { version = "0.56.0", features = ["postgres", "opendal-postg
 anyhow = "1.0.100"
 metrics = "0.24.2"
 metrics-exporter-prometheus = "0.17.2"
-regex = "1.11.2"
+regex = "1.12.1"
 once_cell = "1.21.3"
 dashmap = "6.1.0"
 sha2 = "0.10.9"

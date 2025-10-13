@@ -53,7 +53,7 @@ quick-xml = { version = "0.38.3", features = ["serialize"] } # Enable Serde inte
 time = { version = "0.3.44", features = ["formatting", "parsing"] } # Enable parsing/formatting APIs (OffsetDateTime::parse, format_description).
 strsim = "0.11.1"
 html-escape = "0.2.13"
-lettre = { version = "0.11.18", features = ["tokio1", "builder", "smtp-transport", "tokio1-native-tls"] } # Use Tokio with native-tls over SMTP.
+lettre = { version = "0.11.19", features = ["tokio1", "builder", "smtp-transport", "tokio1-native-tls"] } # Use Tokio with native-tls over SMTP.
 tempfile = "3.22.0"
 feed-rs = "2.3.1"
 

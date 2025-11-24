@@ -49,7 +49,7 @@ dashmap = "6.1.0"
 sha2 = "0.10.9"
 chrono = "0.4.42"
 toml = "0.9.7"
-quick-xml = { version = "0.38.3", features = ["serialize"] } # Enable Serde integration for `quick-xml::de`.
+quick-xml = { version = "0.38.4", features = ["serialize"] } # Enable Serde integration for `quick-xml::de`.
 time = { version = "0.3.44", features = ["formatting", "parsing"] } # Enable parsing/formatting APIs (OffsetDateTime::parse, format_description).
 strsim = "0.11.1"
 html-escape = "0.2.13"

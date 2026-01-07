@@ -13,6 +13,6 @@
   },
   "dependencies": {
     "lucide-react": "^0.544.0",
-    "preact": "^10.20.2"
+    "preact": "^10.28.2"
   }
 }

@@ -132,3 +132,7 @@ ingest_last.csv
 req.json
 ing.json
 empty.json
+.claude/
+backup/
+backup_shuttle_2026-01-07_1621/
+data/

@@ -34,45 +34,64 @@ export type DecideRequest = {
 const API_BASE = (import.meta as any).env?.VITE_API_BASE ?? "/api";
 const DECIDE_URL = `${API_BASE.replace(/\/+$/,"")}/decide`;
 
-async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
-  const resp = await fetch(input, init);
+type BackendDecideResponse = {
+  decision?: unknown;
+  verdict?: unknown;
+  confidence?: unknown;
+  reasons?: unknown;
+  top_contributors?: unknown;
+  trend?: unknown;
+};
+
+async function parseJson(resp: Response): Promise<unknown> {
   const text = await resp.text();
+  if (!text) {
+    throw new Error("Empty response body from /api/decide");
+  }
   try {
-    return JSON.parse(text) as T;
+    return JSON.parse(text);
   } catch {
-    // backend může občas vrátit jen "BUY"/"SELL"/"HOLD"
-    return text as unknown as T;
+    throw new Error(`Invalid JSON from /api/decide: ${text}`);
   }
 }
 
-/** Zavolá /api/decide a vrátí sjednocený DecideResponse. */
-export async function fetchDecide(req: DecideRequest = {}): Promise<DecideResponse> {
-  const body = Object.keys(req).length ? JSON.stringify(req) : "{}";
-  const raw = await fetchJson<any>(DECIDE_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body
-  });
+async function ensureOk(resp: Response): Promise<void> {
+  if (resp.ok) return;
+  const text = await resp.text();
+  throw new Error(`HTTP ${resp.status} ${resp.statusText}: ${text || "<empty body>"}`);
+}
 
-  // Podpora tvarů: "HOLD" | { decision, confidence, reasons, top_contributors, trend }
+function normalizeReasons(raw: unknown): Reason[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((r: any) => ({
+    message: typeof r === "string" ? r : String(r?.message ?? ""),
+    weight: typeof r?.weight === "number" ? r.weight : undefined,
+    kind: typeof r?.kind === "string" ? r.kind : undefined
+  }));
+}
+
+function normalizeDecideResponse(raw: BackendDecideResponse): DecideResponse {
   const decisionRaw =
-    typeof raw === "string"
-      ? raw
-      : typeof raw?.decision === "string"
+    typeof raw?.decision === "string"
       ? raw.decision
-      : "HOLD";
+      : typeof raw?.verdict === "string"
+      ? raw.verdict
+      : null;
 
-  const verdict = (decisionRaw as string).toUpperCase() as Decision;
+  if (!decisionRaw) {
+    throw new Error("Malformed /api/decide response: missing decision");
+  }
 
-  const confidence = typeof raw?.confidence === "number" ? raw.confidence : 0.5;
+  const verdict = decisionRaw.toUpperCase();
+  if (verdict !== "BUY" && verdict !== "SELL" && verdict !== "HOLD") {
+    throw new Error(`Malformed /api/decide response: invalid decision '${decisionRaw}'`);
+  }
 
-  const top_reasons: Reason[] = Array.isArray(raw?.reasons)
-    ? raw.reasons.map((r: any) => ({
-        message: typeof r === "string" ? r : String(r?.message ?? ""),
-        weight: typeof r?.weight === "number" ? r.weight : undefined,
-        kind: typeof r?.kind === "string" ? r.kind : undefined
-      }))
-    : [];
+  if (typeof raw?.confidence !== "number") {
+    throw new Error("Malformed /api/decide response: missing numeric confidence");
+  }
+
+  const top_reasons = normalizeReasons(raw.reasons);
 
   const evidence: Reason[] = Array.isArray(raw?.top_contributors)
     ? raw.top_contributors.map((c: any) => ({
@@ -86,10 +105,39 @@ export async function fetchDecide(req: DecideRequest = {}): Promise<DecideRespon
 
   const trend: DecideTrend | undefined =
     raw?.trend &&
-    Array.isArray(raw.trend?.values) &&
-    Array.isArray(raw.trend?.labels)
-      ? { values: raw.trend.values as number[], labels: raw.trend.labels as string[] }
+    Array.isArray((raw.trend as any)?.values) &&
+    Array.isArray((raw.trend as any)?.labels)
+      ? {
+          values: (raw.trend as any).values as number[],
+          labels: (raw.trend as any).labels as string[]
+        }
       : undefined;
 
-  return { verdict, confidence, top_reasons, evidence, trend };
+  return {
+    verdict: verdict as Decision,
+    confidence: raw.confidence,
+    top_reasons,
+    evidence,
+    trend
+  };
+}
+
+// GET /api/decide returns latest stable backend state for homepage cold start.
+export async function fetchLatestDecision(): Promise<DecideResponse> {
+  const resp = await fetch(DECIDE_URL, { method: "GET" });
+  await ensureOk(resp);
+  const raw = await parseJson(resp);
+  return normalizeDecideResponse(raw as BackendDecideResponse);
+}
+
+// POST /api/decide executes a decision run with optional input payload.
+export async function runDecision(req: DecideRequest = {}): Promise<DecideResponse> {
+  const resp = await fetch(DECIDE_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(req)
+  });
+  await ensureOk(resp);
+  const raw = await parseJson(resp);
+  return normalizeDecideResponse(raw as BackendDecideResponse);
 }

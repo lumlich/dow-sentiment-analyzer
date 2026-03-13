@@ -10,7 +10,12 @@ import EvidenceList from "./components/EvidenceList";
 import TrendPanel, { type TrendPanelProps } from "./components/TrendPanel";
 import DebugStatus from "./components/DebugStatus";
 
-import { fetchDecide, type Reason, type DecideResponse } from "./lib/api";
+import { fetchLatestDecision, runDecision, type Reason, type DecideResponse } from "./lib/api";
+import {
+  DEMO_SCENARIOS,
+  DEFAULT_DEMO_SCENARIO_ID,
+  type DemoScenarioId
+} from "./lib/demoScenarios";
 import "./app.css";
 
 const HIDE_DEV = ((import.meta as any).env?.VITE_HIDE_DEV ?? "") === "1";
@@ -31,6 +36,7 @@ export const App: FunctionalComponent = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [selectedScenarioId, setSelectedScenarioId] = useState<DemoScenarioId>(DEFAULT_DEMO_SCENARIO_ID);
 
   // Tick to recompute "fresh/stale" age labels
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
@@ -39,6 +45,21 @@ export const App: FunctionalComponent = () => {
     return () => clearInterval(t);
   }, []);
 
+  const selectedScenario = useMemo(
+    () => DEMO_SCENARIOS.find((scenario) => scenario.id === selectedScenarioId) ?? DEMO_SCENARIOS[0],
+    [selectedScenarioId]
+  );
+
+  function applyDecision(data: DecideResponse): void {
+    setVerdict(data.verdict);
+    setConfidence(data.confidence);
+    setTopReasons(data.top_reasons ?? []);
+    setEvidence(data.evidence ?? []);
+    setTrendVals(data.trend?.values ?? []);
+    setTrendLabels(data.trend?.labels ?? []);
+    setUpdatedAt(new Date().toISOString());
+  }
+
   // Fetch once on mount
   useEffect(() => {
     let mounted = true;
@@ -46,15 +67,9 @@ export const App: FunctionalComponent = () => {
       try {
         setLoading(true);
         setError(null);
-        const data: DecideResponse = await fetchDecide();
+        const data: DecideResponse = await fetchLatestDecision();
         if (!mounted) return;
-        setVerdict(data.verdict);
-        setConfidence(data.confidence);
-        setTopReasons(data.top_reasons ?? []);
-        setEvidence(data.evidence ?? []);
-        setTrendVals(data.trend?.values ?? []);
-        setTrendLabels(data.trend?.labels ?? []);
-        setUpdatedAt(new Date().toISOString());
+        applyDecision(data);
       } catch (e: any) {
         setError(String(e?.message ?? e));
       } finally {
@@ -63,6 +78,19 @@ export const App: FunctionalComponent = () => {
     })();
     return () => { mounted = false; };
   }, []);
+
+  async function runSelectedDemoScenario(): Promise<void> {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await runDecision({ inputs: selectedScenario.inputs });
+      applyDecision(data);
+    } catch (e: any) {
+      setError(String(e?.message ?? e));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   function fmtUtc(iso?: string | null): string {
     if (!iso) return "";
@@ -119,6 +147,36 @@ export const App: FunctionalComponent = () => {
       <section className="section" aria-label="Get instant alerts">
         <AlertsInfoBox />
         {/* copy hint: "You’ll get a ping on verdict/confidence change." */}
+      </section>
+
+      <section className="section section-compact" aria-label="Demo scenarios">
+        <div className="card">
+          <PanelHeader title="Demo scenarios" subtitle="Deterministic sample payloads for reliable demos" />
+          <div className="stack-4">
+            <label className="small" htmlFor="demo-scenario-select">Scenario</label>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <select
+                id="demo-scenario-select"
+                value={selectedScenarioId}
+                onChange={(e) => setSelectedScenarioId((e.currentTarget as HTMLSelectElement).value as DemoScenarioId)}
+              >
+                {DEMO_SCENARIOS.map((scenario) => (
+                  <option key={scenario.id} value={scenario.id}>
+                    {scenario.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="btn-chip"
+                type="button"
+                disabled={loading}
+                onClick={runSelectedDemoScenario}
+              >
+                {loading ? "Running..." : "Run scenario"}
+              </button>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="section stack-4" aria-label="Main panels">
